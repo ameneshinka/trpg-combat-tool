@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拚點戰鬥系統 — 戰鬥引擎</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>拚點戰鬥系統 — 戰鬥引擎</h1>
+  <div class="header-right">
+    <span id="connState" class="conn-state">單機</span>
+    <span id="turnRoundIndicator">戰鬥輪 — / 回合 —</span>
+  </div>
+</header>
+
+<main>
+  <!-- ============ SETUP SCREEN ============ -->
+  <section id="setupScreen">
+    <div id="reconnectBanner" class="reconnect-banner hidden">
+      <span id="reconnectText"></span>
+      <button id="btnReconnect" class="primary">重連</button>
+      <button id="btnDiscardSession">放棄</button>
+    </div>
+    <h2>連線模式</h2>
+    <div class="row" id="modeRow">
+      <label><input type="radio" name="mode" value="solo" checked> 單機</label>
+      <label><input type="radio" name="mode" value="kp"> 建立房間（KP）</label>
+      <label><input type="radio" name="mode" value="player"> 加入房間（玩家）</label>
+    </div>
+    <p class="hint" id="syncUnavailable" style="display:none; color:var(--warn);">
+      未偵測到有效的 Firebase 設定（js/firebase-config.js 的 databaseURL 為空）。連線模式停用，僅單機可用。
+    </p>
+    <p class="hint" style="color:var(--warn);">⚠ 原型模式：房間規則寬鬆，任何知道房號者皆可讀寫，請勿放真實隱私資料。</p>
+
+    <div id="kpRoomRow" class="row hidden">
+      <span>房號：</span><span id="kpRoomCode" class="roomcode">————</span>
+      <button id="btnGenRoom">產生房號</button>
+    </div>
+
+    <div id="playerJoinRow" class="hidden">
+      <div class="row">
+        <input type="text" id="joinRoomCode" placeholder="房號（4 碼）" maxlength="6" style="width:120px; text-transform:uppercase;">
+        <input type="text" id="playerName" placeholder="你的暱稱" style="width:120px;">
+        <button id="btnJoinRoom" class="primary">加入房間</button>
+      </div>
+      <div id="joinStatus" class="hint"></div>
+    </div>
+
+    <div id="battleSetupBlock">
+    <h2>戰鬥前設定</h2>
+    <p class="hint">貼上或編輯 JSON 格式的參戰名單（含技能庫）。可先載入範例熟悉格式。</p>
+    <div class="row">
+      <button id="btnLoadSample">載入範例名單</button>
+      <button id="btnValidateRoster">驗證 JSON</button>
+    </div>
+    <textarea id="rosterJson" spellcheck="false"></textarea>
+    <div id="rosterError" class="error"></div>
+
+    <h3>PC 槽位成長順序（§4.1）</h3>
+    <p class="hint">輸入 PC 的 id，以逗號分隔，依序輪流 +1 槽位（例：pc_a,pc_b,pc_c）</p>
+    <input type="text" id="pcGrowthOrder" placeholder="pc_a,pc_b,pc_c">
+
+    <div class="row">
+      <button id="btnStartBattle" class="primary">開始戰鬥</button>
+    </div>
+    </div><!-- /battleSetupBlock -->
+  </section>
+
+  <!-- ============ BATTLE SCREEN ============ -->
+  <section id="battleScreen" class="hidden">
+    <div class="row">
+      <button id="btnBackToSetup">← 回設定</button>
+      <div id="phaseIndicator" class="phase-indicator">階段一：回合開始</div>
+    </div>
+
+    <div id="entityPanels" class="entity-panels"></div>
+
+    <div id="phaseAction" class="phase-action"></div>
+
+    <h3>戰鬥紀錄</h3>
+    <div id="battleLog" class="battle-log"></div>
+  </section>
+</main>
+
+<!-- Firebase SDK 採「用到才載入」（見 sync.js 的 loadSdk）；離線或未填 config 時單機照常可用 -->
+<script src="js/firebase-config.js?v=2"></script>
+<script src="js/sync.js?v=2"></script>
+
+<script src="js/data.js?v=2"></script>
+<script src="js/engine/slotmap.js?v=2"></script>
+<script src="js/engine/clash.js?v=2"></script>
+<script src="js/engine/damage.js?v=2"></script>
+<script src="js/engine/triggers.js?v=2"></script>
+<script src="js/engine/turncycle.js?v=2"></script>
+<script src="js/ui.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+</body>
+</html>

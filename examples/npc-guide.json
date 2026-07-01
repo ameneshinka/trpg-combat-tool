@@ -1,0 +1,108 @@
+[
+  {
+    "id": "npc_bandit",
+    "name": "山賊小兵",
+    "isPC": false,
+    "hp": 30,
+    "dex": 9,
+    "attributes": { "STR": 12, "INT": 8, "CON": 11, "SIZ": 11, "LUK": 8 },
+    "skillLibrary": [
+      {
+        "id": "bandit_slash", "name": "亂斬", "type": "attack",
+        "basePower": 8, "coinPower": 3,
+        "coins": ["normal", "normal", "normal"]
+      },
+      {
+        "id": "bandit_guard", "name": "粗劣格擋", "type": "defense",
+        "basePower": 6, "coinPower": 2,
+        "coins": ["normal", "normal"]
+      },
+      {
+        "id": "bandit_throw", "name": "擲石", "type": "attack",
+        "basePower": 5, "coinPower": 2,
+        "coins": ["normal"]
+      }
+    ],
+    "slotMap": { "A": "bandit_slash", "B": "bandit_guard", "C": "bandit_throw" }
+  },
+
+  {
+    "id": "npc_mujin",
+    "name": "木槿",
+    "isPC": false,
+    "hp": 45,
+    "dex": 13,
+    "attributes": { "STR": 10, "INT": 14, "CON": 11, "SIZ": 10, "LUK": 12 },
+    "skillLibrary": [
+      {
+        "id": "mujin_gaze", "name": "仕女的關注", "type": "attack",
+        "basePower": 6, "coinPower": 2,
+        "coins": ["normal", "normal"],
+        "hitEffects": [
+          { "type": "applyState", "who": "target", "state": "lady_gaze", "isMark": true, "layerDelta": 2 }
+        ]
+      },
+      {
+        "id": "mujin_strike_b", "name": "冷冽一擊", "type": "attack",
+        "basePower": 9, "coinPower": 3,
+        "coins": ["normal", "normal", "normal"],
+        "conditions": [
+          {
+            "condition": { "type": "hasState", "who": "target", "state": "lady_gaze", "minLayer": 1 },
+            "basePowerDelta": 6
+          }
+        ]
+      },
+      {
+        "id": "mujin_defend", "name": "優雅回避", "type": "defense",
+        "basePower": 10, "coinPower": 2,
+        "coins": ["normal", "normal"]
+      }
+    ],
+    "slotMap": { "A": "mujin_gaze", "B": "mujin_strike_b", "C": "mujin_defend" }
+  },
+
+  {
+    "id": "npc_valentina",
+    "name": "瓦倫希娜",
+    "isPC": false,
+    "hp": 80,
+    "dex": 15,
+    "attributes": { "STR": 13, "INT": 12, "CON": 14, "SIZ": 12, "LUK": 10 },
+    "skillLibrary": [
+      {
+        "id": "val_normal", "name": "常態射擊", "type": "attack",
+        "basePower": 10, "coinPower": 3,
+        "coins": ["normal", "normal"]
+      },
+      {
+        "id": "val_defend", "name": "預知回避", "type": "defense",
+        "basePower": 9, "coinPower": 3,
+        "coins": ["normal", "normal"]
+      },
+      {
+        "id": "val_charge", "name": "蓄能彈", "type": "attack",
+        "basePower": 8, "coinPower": 4,
+        "coins": ["green", "normal"],
+        "hitEffects": [
+          { "type": "applyState", "who": "self", "state": "overheat", "isMark": true, "layerDelta": 1 }
+        ]
+      },
+      {
+        "id": "val_overheat", "name": "過熱爆發", "type": "attack", "drawable": false,
+        "basePower": 16, "coinPower": 5,
+        "coins": ["red", "red", "normal"]
+      }
+    ],
+    "slotMap": { "A": "val_normal", "B": "val_defend", "C": "val_charge" },
+    "slotMapRules": [
+      {
+        "condition": { "type": "hasState", "who": "self", "state": "overheat", "minLayer": 1 },
+        "slot": "C",
+        "setSkillId": "val_overheat",
+        "priority": 10
+      }
+    ],
+    "states": {}
+  }
+]

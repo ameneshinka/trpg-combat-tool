@@ -1,0 +1,18 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Logs
+*.log
+
+# Node (若日後導入工具鏈)
+node_modules/
+
+# Claude Code 機器本地設定（工具權限等，非專案內容）
+.claude/settings.local.json
+
+# 註：js/firebase-config.js 為前端公開設定（非機密），刻意「不」忽略，
+# 以利 GitHub Pages 直接部署。真正的安全邊界是 Realtime Database 安全規則。
