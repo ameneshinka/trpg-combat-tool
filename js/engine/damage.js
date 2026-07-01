@@ -28,9 +28,17 @@
   Engine.targetCoef = targetCoef;
 
   function getConfusionThresholds(entity) {
-    return entity.confusionThresholds && entity.confusionThresholds.length
-      ? entity.confusionThresholds
+    // §3.1「震顫可上修混亂值」：震顫（級數驅動）把主混亂門檻往上調，使混亂更早觸發
+    const tremor = (Engine.getState(entity, "震顫").level) || 0;
+    const base = entity.confusionThresholds && entity.confusionThresholds.length
+      ? entity.confusionThresholds.slice()
       : [Math.floor(entity.maxHp * 0.6), 0];
+    if (tremor > 0 && base.length > 0) {
+      // 上修最高的那個門檻（主門檻）
+      const maxIdx = base.indexOf(Math.max.apply(null, base));
+      base[maxIdx] = base[maxIdx] + tremor;
+    }
+    return base;
   }
   function checkConfusionCrossing(entity, hpBefore, hpAfter) {
     if (entity.isConfused || entity.confusionLockTurns > 0) return false;
@@ -42,6 +50,26 @@
     return false;
   }
   Engine.checkConfusionCrossing = checkConfusionCrossing;
+
+  // 直接扣血（非逐枚攻擊）：先扣臨時生命值、再扣真實血量，並重檢黃金交叉。
+  // 供爆發/殘響、開裂、延燒等「文本直接扣血」的效果共用。
+  function applyDirectDamage(target, amount, log, label) {
+    log = log || function () {};
+    amount = Math.max(0, Math.floor(amount || 0));
+    if (amount === 0) return;
+    const before = target.hp, tb = target.tempHp;
+    let remain = amount;
+    if (target.tempHp > 0) { const f = Math.min(target.tempHp, remain); target.tempHp -= f; remain -= f; }
+    target.hp = Math.max(0, target.hp - remain);
+    log((label || "直接傷害") + "：" + target.name + " -" + amount + "（臨時血" + tb + "→" + target.tempHp + "，HP " + before + "→" + target.hp + "）");
+    if (!target.isConfused && target.confusionLockTurns <= 0 && checkConfusionCrossing(target, before, target.hp)) {
+      target.isConfused = true;
+      target.confusionLockTurns = 2;
+      target.cantActRestOfTurn = true;
+      log("⚠ " + target.name + " 血量跨越混亂值，進入混亂！（confusionLockTurns=2）");
+    }
+  }
+  Engine.applyDirectDamage = applyDirectDamage;
 
   /**
    * 逐枚硬幣傷害結算 generator。

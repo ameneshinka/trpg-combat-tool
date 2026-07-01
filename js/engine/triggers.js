@@ -102,6 +102,26 @@
         who.focus = Math.max(-40, Math.min(40, (who.focus || 0) + (eff.amount || 0)));
         log("→ [" + timingLabel + "] " + who.name + " 專注力 " + (eff.amount >= 0 ? "+" : "") + (eff.amount || 0) + "（現 " + who.focus + "）");
 
+      } else if (eff.type === "detonateState") {
+        // §8「爆發／殘響」：引爆累積的級數驅動狀態（血瀑/炎瀑/荊棘瀑…），依文本造成
+        // 正比傷害，並可附帶施加其他狀態（如延燒額外），最後消耗掉該狀態。
+        const who = eff.who === "self" ? caster : target;
+        if (!who) continue;
+        const st = Engine.getState(who, eff.state);
+        const amount = (st.level || st.layer || 0);
+        if (amount <= 0) { log("→ [" + timingLabel + "] 引爆〈" + eff.state + "〉但無累積，無效果。"); continue; }
+        if (eff.damagePerLevel) {
+          Engine.applyDirectDamage(who, amount * eff.damagePerLevel, log, "[" + timingLabel + "] 引爆" + eff.state);
+        }
+        if (eff.alsoApply) {
+          Engine.applyState(who, eff.alsoApply.state, eff.alsoApply.layerDelta || 0, eff.alsoApply.levelDelta || 0, { exemptThisTurn: !!exemptStates });
+          log("→ [" + timingLabel + "] 引爆附帶：" + who.name + " 獲得「" + eff.alsoApply.state + "」");
+        }
+        if (eff.consume !== false) {
+          const s = Engine.ensureState(who, eff.state); s.layer = 0; s.level = 0;
+          log("→ [" + timingLabel + "] 〈" + eff.state + "〉已被引爆消耗。");
+        }
+
       } else {
         log("→ [" + timingLabel + "] 未知效果類型：" + eff.type, "info");
       }
