@@ -316,8 +316,9 @@
   }
   function isPlayerFillable(req) {
     if (!req) return false;
-    if (req.type === "confirmPairing") return false; // 永遠 KP 裁定
-    if (req.type === "npcSlots") return false;       // NPC 槽位 KP 手填
+    if (req.type === "confirmPairing") return false;  // 永遠 KP 裁定
+    if (req.type === "passiveResolve") return false;  // 被動隨機結算 KP 裁定
+    if (req.type === "npcSlots") return false;        // NPC 槽位 KP 手填
     const ownerId = requestOwnerEntityId(req);
     if (!ownerId) return false;
     const ent = findEntity(ownerId);
@@ -402,6 +403,7 @@
     chooseSkill: "階段一：回合開始 — 選擇技能",
     declareTarget: "階段二：宣告與配對",
     confirmPairing: "階段二：宣告與配對 — KP 確認最終配對",
+    passiveResolve: "被動結算 — KP 裁定隨機效果",
     damageDie: "階段三/四：傷害骰",
     concentrationD20: "階段四：凝神判定（1d20）"
   };
@@ -529,6 +531,39 @@
 
       const btn = el("button", { cls: "primary", text: "確認配對，進入拚點" });
       btn.onclick = function () { dispatchSubmit({ clashes: clashes, unilaterals: unilaterals }); };
+      box.appendChild(btn);
+      return;
+    }
+
+    if (req.type === "passiveResolve") {
+      const e = findEntity(req.entityId);
+      box.appendChild(el("h4", { text: (e ? e.name : req.entityId) + " 被動〈" + req.passiveName + "〉— 隨機結算（工具已自動選，可覆寫）" }));
+      const fireWrap = el("label", { cls: "row" });
+      const fireCb = el("input"); fireCb.type = "checkbox"; fireCb.checked = !!req.autoFire;
+      fireWrap.appendChild(fireCb); fireWrap.appendChild(el("span", { text: " 觸發此被動" }));
+      box.appendChild(fireWrap);
+
+      let targetSel = null;
+      const choices = req.targetChoices || [];
+      if (!req.allowMulti && choices.length > 0) {
+        const row = el("div", { cls: "row" });
+        row.appendChild(el("span", { text: "目標：" }));
+        targetSel = el("select");
+        choices.forEach(function (c) { const o = el("option", { text: c.name }); o.value = c.id; targetSel.appendChild(o); });
+        if (req.autoTargetId) targetSel.value = req.autoTargetId;
+        row.appendChild(targetSel);
+        box.appendChild(row);
+      } else if (req.allowMulti) {
+        box.appendChild(el("div", { cls: "hint", text: "目標：全體敵方（" + choices.map(function (c) { return c.name; }).join("、") + "）" }));
+      }
+
+      const btn = el("button", { cls: "primary", text: "確認" });
+      btn.onclick = function () {
+        let targetIds;
+        if (req.allowMulti) targetIds = choices.map(function (c) { return c.id; });
+        else targetIds = targetSel ? [targetSel.value] : [];
+        dispatchSubmit({ fire: fireCb.checked, targetIds: targetIds });
+      };
       box.appendChild(btn);
       return;
     }

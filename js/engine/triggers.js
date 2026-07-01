@@ -63,7 +63,7 @@
   // ------------------------------------------------------------
   const MAX_INVOKE_DEPTH = 3;
 
-  function* applySkillEffects(caster, target, effects, timingLabel, log, depth) {
+  function* applySkillEffects(caster, target, effects, timingLabel, log, depth, exemptStates) {
     log = log || function () {};
     depth = depth || 0;
     const list = effects || [];
@@ -74,7 +74,7 @@
       if (eff.type === "applyState") {
         const who = eff.who === "target" ? target : caster;
         if (!who) continue;
-        Engine.applyState(who, eff.state, eff.layerDelta || 0, eff.levelDelta || 0, { isMark: !!eff.isMark });
+        Engine.applyState(who, eff.state, eff.layerDelta || 0, eff.levelDelta || 0, { isMark: !!eff.isMark, exemptThisTurn: !!exemptStates });
         log("→ [" + timingLabel + "] " + who.name + " 獲得「" + eff.state + "」" +
           (eff.layerDelta ? " 層+" + eff.layerDelta : "") + (eff.levelDelta ? " 級+" + eff.levelDelta : "") +
           (eff.isMark ? "（印記）" : ""));
@@ -130,5 +130,80 @@
     }
   }
   Engine.invokeSkillEffect = invokeSkillEffect;
+
+  // ------------------------------------------------------------
+  // 被動邏輯引擎（§3.1 passives, §5 step5/§5 phase6-step2, §12C）
+  // 宣告式：passive = { id, name, trigger, condition?, chance?, target, targetState?, effects[] }
+  //   trigger: "turnStart" | "turnEnd"
+  //   target : "self" | "randomEnemy" | "randomEnemyWithout" | "lowestHpEnemy" | "allEnemies" | "randomAlly"
+  //   chance : 0..1（省略=必定）；隨機成分（chance 或多候選）會 yield 給 KP 覆寫（§13）
+  //   effects: 與技能效果同一套（applyState/invokeSkill/heal/focus…）
+  // turnEnd 施加的狀態會標為豁免（§5 phase6 例外，不吃當回合層-1）。
+  // ------------------------------------------------------------
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; }
+    return a;
+  }
+
+  function resolvePassiveTargets(battleState, entity, p) {
+    const alive = battleState.entities.filter(function (e) { return e.hp > 0; });
+    const enemies = alive.filter(function (e) { return e.isPC !== entity.isPC; });
+    const allies = alive.filter(function (e) { return e.isPC === entity.isPC && e.id !== entity.id; });
+    switch (p.target) {
+      case "self": return [entity];
+      case "randomEnemy": return shuffle(enemies);
+      case "randomEnemyWithout": return shuffle(enemies.filter(function (e) {
+        const st = e.states[p.targetState]; return !(st && (st.layer || 0) > 0);
+      }));
+      case "lowestHpEnemy": return enemies.slice().sort(function (a, b) { return a.hp - b.hp; });
+      case "allEnemies": return enemies;
+      case "randomAlly": return shuffle(allies);
+      default: return [entity];
+    }
+  }
+
+  function* runPassives(battleState, entity, when, log) {
+    log = log || function () {};
+    const list = (entity.passives || []).filter(function (p) { return p.trigger === when; });
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (p.condition && !Engine.evaluateCondition(p.condition, { self: entity, target: null })) continue;
+
+      const candidates = resolvePassiveTargets(battleState, entity, p);
+      let fire = (p.chance === undefined) ? true : (Math.random() < p.chance);
+      let chosen = candidates.length ? [candidates[0]] : [];
+      const isMulti = (p.target === "allEnemies");
+      const hasRandom = (p.chance !== undefined) || (candidates.length > 1) || (p.target && p.target !== "self");
+
+      // 有隨機成分 → 工具先自動決定，再 yield 給 KP 覆寫（§13：自動骰/選、KP 可覆寫）
+      if (hasRandom) {
+        const ov = yield {
+          type: "passiveResolve",
+          entityId: entity.id,
+          passiveName: p.name || p.id,
+          autoFire: fire,
+          allowMulti: isMulti,
+          autoTargetId: chosen[0] ? chosen[0].id : null,
+          targetChoices: candidates.map(function (c) { return { id: c.id, name: c.name }; })
+        };
+        if (ov) {
+          if (typeof ov.fire === "boolean") fire = ov.fire;
+          if (ov.targetIds) {
+            chosen = ov.targetIds.map(function (id) { return battleState.entities.find(function (e) { return e.id === id; }); }).filter(Boolean);
+          }
+        }
+      }
+
+      if (!fire) { log(entity.name + " 的被動〈" + (p.name || p.id) + "〉未觸發。"); continue; }
+      const targets = (p.target === "self") ? [entity] : (isMulti ? candidates : chosen);
+      if (targets.length === 0) { log(entity.name + " 的被動〈" + (p.name || p.id) + "〉無可用目標，略過。"); continue; }
+      for (let t = 0; t < targets.length; t++) {
+        log(entity.name + " 的被動〈" + (p.name || p.id) + "〉觸發 → " + targets[t].name);
+        yield* applySkillEffects(entity, targets[t], p.effects, "被動:" + (p.name || p.id), log, 0, when === "turnEnd");
+      }
+    }
+  }
+  Engine.runPassives = runPassives;
 
 })(window);

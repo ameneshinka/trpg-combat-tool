@@ -112,8 +112,11 @@
       }
     }
 
-    // 5. 回合開始被動結算（MVP：自訂被動腳本不在範圍內，由 KP 用「手動調整狀態」面板處理）
-    log("（回合開始被動結算為 MVP 範圍外，如需「隨機附加狀態」等效果請由 KP 用狀態面板手動套用）", "info");
+    // 5. 回合開始被動結算（宣告式被動：turnStart）
+    for (const e of entities) {
+      if (e.hp <= 0) continue;
+      yield* Engine.runPassives(battleState, e, "turnStart", log);
+    }
 
     // 7. 重算有效 DEX
     entities.forEach(function (e) { Engine.computeEffectiveDex(e); });
@@ -160,10 +163,14 @@
     log("階段六：回合結束", "phase");
     // 1. 臨時生命值歸零
     entities.forEach(function (e) { if (e.tempHp > 0) { e.tempHp = 0; } });
-    // 2. 回合結束觸發：延燒
+    // 2. 回合結束觸發：延燒 + 宣告式被動（turnEnd）。此處讀取的是本回合完整、未扣層的狀態。
     entities.filter(function (e) { return e.hp > 0; }).forEach(function (e) {
       Engine.applyEndOfTurnBurn(e, log);
     });
+    for (const e of entities) {
+      if (e.hp <= 0) continue;
+      yield* Engine.runPassives(battleState, e, "turnEnd", log); // turnEnd 施加的狀態已標豁免
+    }
     // 3. 全體狀態層數 -1（步驟2剛加上的狀態豁免）
     entities.forEach(function (e) {
       Object.keys(e.states).forEach(function (name) {

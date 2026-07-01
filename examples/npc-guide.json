@@ -111,6 +111,17 @@
         "priority": 10
       }
     ],
+    "passives": [
+      {
+        "id": "val_regen", "name": "冷卻循環", "trigger": "turnEnd", "target": "self",
+        "effects": [ { "type": "focus", "who": "self", "amount": 3 } ]
+      },
+      {
+        "id": "val_bind", "name": "牽制場", "trigger": "turnStart", "chance": 0.5,
+        "target": "randomEnemyWithout", "targetState": "綁縛",
+        "effects": [ { "type": "applyState", "who": "target", "state": "綁縛", "layerDelta": 2 } ]
+      }
+    ],
     "states": {}
   }
 ]
