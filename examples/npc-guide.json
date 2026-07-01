@@ -78,7 +78,15 @@
       {
         "id": "val_defend", "name": "預知回避", "type": "defense",
         "basePower": 9, "coinPower": 3,
-        "coins": ["normal", "normal"]
+        "coins": ["normal", "normal"],
+        "hitEffects": [
+          { "type": "invokeSkill", "skillId": "val_counter", "targetRef": "target" }
+        ]
+      },
+      {
+        "id": "val_counter", "name": "預知反擊", "type": "attack", "drawable": false,
+        "basePower": 12, "coinPower": 4,
+        "coins": ["red", "normal"]
       },
       {
         "id": "val_charge", "name": "蓄能彈", "type": "attack",

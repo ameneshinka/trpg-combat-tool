@@ -295,8 +295,8 @@
     log(a.name + "《" + skillA.name + "》 拚點 vs " + b.name + "《" + skillB.name + "》", "info");
 
     // §3.2 [使用時] useEffects：雙方技能都「被使用」，各自觸發（不論勝負）
-    Engine.applySkillEffects(a, b, skillA.useEffects, "使用時", log);
-    Engine.applySkillEffects(b, a, skillB.useEffects, "使用時", log);
+    yield* Engine.applySkillEffects(a, b, skillA.useEffects, "使用時", log);
+    yield* Engine.applySkillEffects(b, a, skillB.useEffects, "使用時", log);
 
     const result = Engine.runClash({ entity: a, skill: skillA }, { entity: b, skill: skillB }, log);
 
@@ -315,10 +315,10 @@
         // 使用拚點時已算好的有效威力（含強壯/虛弱 + 印記條件），與拚點一致
         yield* Engine.damageResolution(winnerEntity, loserEntity, aliveCoins, winnerSideData.basePower, winnerSideData.coinPower, winnerSkill.name, log);
         // §3.2 [命中時] hitEffects：攻擊命中後觸發（施加印記等）
-        if (loserEntity.hp >= 0) Engine.applySkillEffects(winnerEntity, loserEntity, winnerSkill.hitEffects, "命中時", log);
+        if (loserEntity.hp >= 0) yield* Engine.applySkillEffects(winnerEntity, loserEntity, winnerSkill.hitEffects, "命中時", log);
       } else {
         log(winnerEntity.name + " 的防禦型技能《" + winnerSkill.name + "》拚點成功，無傷害結算（防禦成功）。");
-        Engine.applySkillEffects(winnerEntity, loserEntity, winnerSkill.hitEffects, "防禦成功時", log);
+        yield* Engine.applySkillEffects(winnerEntity, loserEntity, winnerSkill.hitEffects, "防禦成功時", log);
       }
 
       // 碎幣追加攻擊：只有「拚輸」的一方，紅幣碎了才觸發
@@ -347,11 +347,11 @@
       log("（此為防禦型技能且無人可拚，無事發生）");
       return;
     }
-    Engine.applySkillEffects(attacker, target, skill.useEffects, "使用時", log);
+    yield* Engine.applySkillEffects(attacker, target, skill.useEffects, "使用時", log);
     const allCoins = skill.coins.map(function (c) { return { type: c.type }; });
     const eff = Engine.computeEffectivePower(attacker, skill, target);
     yield* Engine.damageResolution(attacker, target, allCoins, eff.basePower, eff.coinPower, skill.name, log);
-    Engine.applySkillEffects(attacker, target, skill.hitEffects, "命中時", log);
+    yield* Engine.applySkillEffects(attacker, target, skill.hitEffects, "命中時", log);
   }
   Engine.resolveUnilateral = resolveUnilateral;
 

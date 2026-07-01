@@ -52,30 +52,83 @@
   Engine.applyEndOfTurnBurn = applyEndOfTurnBurn;
 
   // ------------------------------------------------------------
-  // 技能效果處理器（§3.2 useEffects/hitEffects, §11 印記施加）
+  // 技能效果處理器（§3.2 useEffects/hitEffects, §11 印記施加, §4.3 喚出）
+  // 為 generator：invokeSkill 喚出的攻擊技需暫停等傷害骰，故整條路徑用 yield*。
   // 支援的效果類型：
   //   { type:"applyState", who:"self"|"target", state, layerDelta, levelDelta, isMark }
-  //   { type:"invokeSkill", ... }  → MVP 尚未自動化，僅記錄提示由 KP 手動處理
+  //   { type:"invokeSkill", skillId, targetRef:"target"|"self" }
+  //        繞過骰選，直接以「單方面攻擊」打出 caster 技能庫裡的該技能（可為 drawable:false）
+  //   { type:"heal"/"tempHp"/"focus", who, amount }  常見數值效果
   // caster/target 為 entity；condition（若有）以 §4.3 直譯器判定。
   // ------------------------------------------------------------
-  function applySkillEffects(caster, target, effects, timingLabel, log) {
+  const MAX_INVOKE_DEPTH = 3;
+
+  function* applySkillEffects(caster, target, effects, timingLabel, log, depth) {
     log = log || function () {};
-    (effects || []).forEach(function (eff) {
-      if (eff.condition && !Engine.evaluateCondition(eff.condition, { self: caster, target: target })) return;
+    depth = depth || 0;
+    const list = effects || [];
+    for (let i = 0; i < list.length; i++) {
+      const eff = list[i];
+      if (eff.condition && !Engine.evaluateCondition(eff.condition, { self: caster, target: target })) continue;
+
       if (eff.type === "applyState") {
         const who = eff.who === "target" ? target : caster;
-        if (!who) return;
+        if (!who) continue;
         Engine.applyState(who, eff.state, eff.layerDelta || 0, eff.levelDelta || 0, { isMark: !!eff.isMark });
         log("→ [" + timingLabel + "] " + who.name + " 獲得「" + eff.state + "」" +
           (eff.layerDelta ? " 層+" + eff.layerDelta : "") + (eff.levelDelta ? " 級+" + eff.levelDelta : "") +
           (eff.isMark ? "（印記）" : ""));
+
       } else if (eff.type === "invokeSkill") {
-        log("→ [" + timingLabel + "] invokeSkill 效果（喚出《" + (eff.skillId || "?") + "》）為 MVP 範圍外，請 KP 手動以該技能結算。", "info");
+        if (depth >= MAX_INVOKE_DEPTH) { log("→ [" + timingLabel + "] 喚出遞迴過深，停止。", "info"); continue; }
+        const tgt = eff.targetRef === "self" ? caster : target;
+        yield* invokeSkillEffect(caster, tgt, eff.skillId, timingLabel, log, depth + 1);
+
+      } else if (eff.type === "heal") {
+        const who = eff.who === "target" ? target : caster;
+        if (!who) continue;
+        who.hp = Math.min(who.maxHp, who.hp + (eff.amount || 0));
+        log("→ [" + timingLabel + "] " + who.name + " 回復 " + (eff.amount || 0) + " HP（現 " + who.hp + "）");
+
+      } else if (eff.type === "tempHp") {
+        const who = eff.who === "target" ? target : caster;
+        if (!who) continue;
+        who.tempHp = (who.tempHp || 0) + (eff.amount || 0);
+        log("→ [" + timingLabel + "] " + who.name + " 獲得臨時生命值 +" + (eff.amount || 0) + "（現 " + who.tempHp + "）");
+
+      } else if (eff.type === "focus") {
+        const who = eff.who === "target" ? target : caster;
+        if (!who) continue;
+        who.focus = Math.max(-40, Math.min(40, (who.focus || 0) + (eff.amount || 0)));
+        log("→ [" + timingLabel + "] " + who.name + " 專注力 " + (eff.amount >= 0 ? "+" : "") + (eff.amount || 0) + "（現 " + who.focus + "）");
+
       } else {
         log("→ [" + timingLabel + "] 未知效果類型：" + eff.type, "info");
       }
-    });
+    }
   }
   Engine.applySkillEffects = applySkillEffects;
+
+  // §4.3 喚出：直接以單方面攻擊打出 caster 的某技能（繞過拚點與骰選）
+  function* invokeSkillEffect(caster, target, skillId, timingLabel, log, depth) {
+    const skill = Engine.findSkill(caster, skillId);
+    if (!skill) { log("→ 喚出失敗：" + caster.name + " 技能庫中找不到 " + skillId, "info"); return; }
+    if (!target || target.hp <= 0) { log("→ 喚出《" + skill.name + "》但無有效目標。", "info"); return; }
+    log("→ [" + timingLabel + "] " + caster.name + " 喚出《" + skill.name + "》直接打出（繞過骰選）", "info");
+
+    // 喚出技本身的 useEffects
+    yield* applySkillEffects(caster, target, skill.useEffects, "喚出使用時", log, depth);
+
+    if (skill.type === "attack") {
+      const coins = skill.coins.map(function (c) { return { type: c.type }; });
+      const eff = Engine.computeEffectivePower(caster, skill, target);
+      yield* Engine.damageResolution(caster, target, coins, eff.basePower, eff.coinPower, "喚出:" + skill.name, log);
+      if (target.hp >= 0) yield* applySkillEffects(caster, target, skill.hitEffects, "喚出命中時", log, depth);
+    } else {
+      // 防禦型被喚出：無傷害，只結算其效果
+      yield* applySkillEffects(caster, target, skill.hitEffects, "喚出（防禦型）", log, depth);
+    }
+  }
+  Engine.invokeSkillEffect = invokeSkillEffect;
 
 })(window);
