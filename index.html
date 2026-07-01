@@ -53,7 +53,15 @@
     <p class="hint">貼上或編輯 JSON 格式的參戰名單（含技能庫）。可先載入範例熟悉格式。</p>
     <div class="row">
       <button id="btnLoadSample">載入範例名單</button>
+      <button id="btnLoadGuide">載入進階範例（建資料指南）</button>
       <button id="btnValidateRoster">驗證 JSON</button>
+    </div>
+    <div class="row">
+      <span class="hint">快速插入範本：</span>
+      <button id="btnTplNpc">＋NPC</button>
+      <button id="btnTplSkill">插入技能</button>
+      <button id="btnTplPassive">插入被動</button>
+      <span class="hint">（技能/被動會插入游標位置）</span>
     </div>
     <textarea id="rosterJson" spellcheck="false"></textarea>
     <div id="rosterError" class="error"></div>

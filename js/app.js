@@ -16,8 +16,9 @@
   }
 
   function validate() {
+    const raw = $("#rosterJson").value;
     try {
-      const data = JSON.parse($("#rosterJson").value);
+      const data = JSON.parse(raw);
       if (!Array.isArray(data)) throw new Error("最外層必須是陣列（entities 清單）");
       data.forEach(function (e, i) {
         if (!e.id) throw new Error("第 " + (i + 1) + " 個實體缺少 id");
@@ -28,9 +29,68 @@
       return data;
     } catch (err) {
       $("#rosterError").style.color = "";
-      $("#rosterError").textContent = "JSON 錯誤：" + err.message;
+      let msg = err.message;
+      const m = /position (\d+)/.exec(msg);
+      if (m) {
+        const pos = Number(m[1]);
+        const upto = raw.slice(0, pos);
+        const line = upto.split("\n").length;
+        const col = pos - upto.lastIndexOf("\n");
+        msg += "（約第 " + line + " 行、第 " + col + " 欄）";
+      }
+      $("#rosterError").textContent = "JSON 錯誤：" + msg;
       return null;
     }
+  }
+
+  // ---------------- 建資料輔助（輕量） ----------------
+  const NPC_TEMPLATE = {
+    id: "npc_new", name: "新角色", isPC: false, hp: 40, dex: 10,
+    attributes: { STR: 10, INT: 10, CON: 10, SIZ: 10, LUK: 10 },
+    skillLibrary: [
+      { id: "skill_1", name: "技能一", type: "attack", basePower: 8, coinPower: 3, coins: ["normal", "normal"] }
+    ],
+    slotMap: { A: "skill_1", B: "skill_1", C: "skill_1" }
+  };
+  const SKILL_SNIPPET =
+    '{ "id": "skill_x", "name": "技能名", "type": "attack", "basePower": 8, "coinPower": 3, "coins": ["normal"], "hitEffects": [] }';
+  const PASSIVE_SNIPPET =
+    '{ "id": "passive_x", "name": "被動名", "trigger": "turnStart", "target": "self", "effects": [ { "type": "focus", "who": "self", "amount": 3 } ] }';
+
+  function insertAtCursor(text) {
+    const ta = $("#rosterJson");
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+    ta.selectionStart = ta.selectionEnd = s + text.length;
+    ta.focus();
+  }
+
+  function addNpcTemplate() {
+    try {
+      const arr = JSON.parse($("#rosterJson").value);
+      if (!Array.isArray(arr)) throw new Error("not array");
+      arr.push(JSON.parse(JSON.stringify(NPC_TEMPLATE)));
+      $("#rosterJson").value = JSON.stringify(arr, null, 2);
+      $("#rosterError").style.color = "#4caf7d";
+      $("#rosterError").textContent = "已加入一個 NPC 範本（記得改 id 與內容）。";
+    } catch (e) {
+      $("#rosterError").style.color = "";
+      $("#rosterError").textContent = "目前 JSON 無法解析，無法自動加入；請先修正，或手動貼上範本。";
+    }
+  }
+
+  function loadGuide() {
+    fetch("examples/npc-guide.json")
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (t) {
+        $("#rosterJson").value = t;
+        $("#rosterError").style.color = "#4caf7d";
+        $("#rosterError").textContent = "已載入進階範例（印記／形態轉換／喚出／被動／殘響）。";
+      })
+      .catch(function () {
+        $("#rosterError").style.color = "";
+        $("#rosterError").textContent = "載入範例失敗（請確認以伺服器開啟，非 file://）。";
+      });
   }
 
   function getRoster() {
@@ -130,7 +190,11 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     $("#btnLoadSample").addEventListener("click", loadSample);
+    $("#btnLoadGuide").addEventListener("click", loadGuide);
     $("#btnValidateRoster").addEventListener("click", validate);
+    $("#btnTplNpc").addEventListener("click", addNpcTemplate);
+    $("#btnTplSkill").addEventListener("click", function () { insertAtCursor(SKILL_SNIPPET); });
+    $("#btnTplPassive").addEventListener("click", function () { insertAtCursor(PASSIVE_SNIPPET); });
     $("#btnStartBattle").addEventListener("click", startBattle);
     $("#btnBackToSetup").addEventListener("click", backToSetup);
     $("#btnGenRoom").addEventListener("click", genRoom);
