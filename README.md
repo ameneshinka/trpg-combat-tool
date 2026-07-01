@@ -65,8 +65,42 @@ js/
     triggers.js       §8 狀態觸發 + 技能效果處理器（印記施加/讀取）
     turncycle.js      §5 六階段回合生命週期 + §9 攔截
 examples/
-  npc-guide.json      NPC 建資料三階範例（含印記、形態轉換）
+  npc-guide.json      NPC 建資料範例（印記、形態轉換、喚出、被動、殘響）
 ```
+
+## 資料格式參考（規則寫在資料裡）
+
+所有內容以 JSON 名單定義，引擎通用、新增內容免改程式。完整範例見 `examples/npc-guide.json`。
+
+### 技能效果（skill.useEffects / hitEffects / 被動 effects 共用）
+
+| type | 說明 |
+|------|------|
+| `applyState` | 施加狀態：`{ who:"self"\|"target", state, layerDelta, levelDelta, isMark }` |
+| `invokeSkill` | 喚出技能：`{ skillId, targetRef:"target"\|"self" }` 繞過骰選直接打出（可為 `drawable:false`） |
+| `detonateState` | 引爆殘響：`{ who, state, damagePerLevel, consume, alsoApply:{state,layerDelta,levelDelta} }` |
+| `heal` / `tempHp` / `focus` | 數值：`{ who, amount }` |
+
+效果可加 `condition`（見下）做條件式觸發。
+
+### 條件（skill.conditions / slotMapRule.condition / passive.condition / effect.condition）
+
+`{ type, who:"self"\|"target", ... }`：
+- `hasState`（`state`, `minLayer?`, `minLevel?`）、`stateLayerEquals` / `stateLevelEquals`（`state`, `value`）
+- `not`（`cond`）、`and` / `or`（`conds[]`）、`always`
+
+技能條件式威力：`skill.conditions = [{ condition, basePowerDelta, coinPowerDelta }]`。
+
+### 被動（entity.passives[]）
+
+`{ id, name, trigger, condition?, chance?, target, targetState?, effects[] }`
+- `trigger`：`turnStart`（§5 階段一）、`turnEnd`（§5 階段六，施加狀態自動豁免當回合層-1）、`interceptOverride`（§9 攔截例外）
+- `target`：`self` / `randomEnemy` / `randomEnemyWithout`(配 `targetState`) / `lowestHpEnemy` / `allEnemies` / `randomAlly`
+- `chance`：0~1，省略=必定；有隨機成分時工具自動決定並暫停讓 KP 覆寫
+
+### 形態轉換（entity.slotMapRules[]）
+
+`{ condition, slot:"A"\|"B"\|"C", setSkillId, priority }`——條件成立時把某槽位改指向另一技能（替換/解鎖）。
 
 ## 規格
 
