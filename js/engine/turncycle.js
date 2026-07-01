@@ -229,7 +229,11 @@
     attacks.forEach(function (atk) {
       const candidates = intercepts.filter(function (ic) {
         if (ic.decl.protectId !== atk.decl.targetId) return false;
-        if (!ic.entity.isPC) { log("（攔截被拒：" + ic.entity.name + " 為非PC方，依規則不能攔截玩家方向的攻擊，除非該NPC被動另有宣告）"); return false; }
+        // §9 方向限制：非PC方原則上不能攔截玩家方向的攻擊；例外：帶「攔截例外被動」者可覆寫
+        if (!ic.entity.isPC && !Engine.canInterceptPlayers(ic.entity)) {
+          log("（攔截被拒：" + ic.entity.name + " 為非PC方，依規則不能攔截，且無攔截例外被動）");
+          return false;
+        }
         const protectedEntity = byId[atk.decl.targetId];
         if (!protectedEntity) return false;
         return ic.entity.effectiveDex > protectedEntity.effectiveDex; // 嚴格大於

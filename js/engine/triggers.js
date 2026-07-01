@@ -226,4 +226,14 @@
   }
   Engine.runPassives = runPassives;
 
+  // §9 例外：非PC方是否具備「攔截例外被動」而能攔截玩家方向的攻擊。
+  // 以宣告式被動表示：{ trigger:"interceptOverride", condition? }
+  function canInterceptPlayers(entity) {
+    return (entity.passives || []).some(function (p) {
+      return p.trigger === "interceptOverride" &&
+        (!p.condition || Engine.evaluateCondition(p.condition, { self: entity, target: null }));
+    });
+  }
+  Engine.canInterceptPlayers = canInterceptPlayers;
+
 })(window);
