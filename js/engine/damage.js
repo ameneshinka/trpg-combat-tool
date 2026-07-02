@@ -28,18 +28,36 @@
   Engine.targetCoef = targetCoef;
 
   function getConfusionThresholds(entity) {
-    // §3.1「震顫可上修混亂值」：震顫（級數驅動）把主混亂門檻往上調，使混亂更早觸發
-    const tremor = (Engine.getState(entity, "震顫").level) || 0;
-    const base = entity.confusionThresholds && entity.confusionThresholds.length
-      ? entity.confusionThresholds.slice()
+    // 混亂值門檻＝角色實際持有的門檻（可被「震顫爆發／瀑」永久上修），否則用預設。
+    // 震顫本身「不」持續改門檻，只累積，等爆發時一次上修（見 raiseNearestConfusionThreshold）。
+    return entity.confusionThresholds && entity.confusionThresholds.length
+      ? entity.confusionThresholds
       : [Math.floor(entity.maxHp * 0.6), 0];
-    if (tremor > 0 && base.length > 0) {
-      // 上修最高的那個門檻（主門檻）
-      const maxIdx = base.indexOf(Math.max.apply(null, base));
-      base[maxIdx] = base[maxIdx] + tremor;
-    }
-    return base;
   }
+
+  // 把「距離當前HP最接近」的混亂門檻往上修 amount（永久），並在門檻追上當前HP時立即進混亂。
+  function raiseNearestConfusionThreshold(entity, amount, log) {
+    log = log || function () {};
+    amount = Math.max(0, Math.floor(amount || 0));
+    if (amount <= 0) return;
+    if (!entity.confusionThresholds || !entity.confusionThresholds.length) {
+      entity.confusionThresholds = [Math.floor(entity.maxHp * 0.6), 0];
+    }
+    let idx = 0, best = Infinity;
+    for (let i = 0; i < entity.confusionThresholds.length; i++) {
+      const d = Math.abs(entity.hp - entity.confusionThresholds[i]);
+      if (d < best) { best = d; idx = i; }
+    }
+    entity.confusionThresholds[idx] += amount;
+    log("混亂值上修：最接近HP的門檻 +" + amount + " → " + entity.confusionThresholds[idx]);
+    if (!entity.isConfused && entity.confusionLockTurns <= 0 && entity.hp <= entity.confusionThresholds[idx]) {
+      entity.isConfused = true;
+      entity.confusionLockTurns = 2;
+      entity.cantActRestOfTurn = true;
+      log("⚠ 混亂值追上當前HP，" + entity.name + " 立即進入混亂！（confusionLockTurns=2）");
+    }
+  }
+  Engine.raiseNearestConfusionThreshold = raiseNearestConfusionThreshold;
   function checkConfusionCrossing(entity, hpBefore, hpAfter) {
     if (entity.isConfused || entity.confusionLockTurns > 0) return false;
     const thresholds = getConfusionThresholds(entity);

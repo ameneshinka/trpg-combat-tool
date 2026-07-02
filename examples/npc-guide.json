@@ -134,15 +134,16 @@
         "id": "hemo_cut", "name": "淌血割", "type": "attack",
         "basePower": 7, "coinPower": 2, "coins": ["red", "normal"],
         "hitEffects": [
-          { "type": "applyState", "who": "target", "state": "血瀑", "layerDelta": 2, "levelDelta": 2 }
+          { "type": "applyState", "who": "target", "state": "血瀑", "isMark": true },
+          { "type": "applyState", "who": "target", "state": "失血", "layerDelta": 2, "levelDelta": 2 },
+          { "type": "applyState", "who": "target", "state": "震顫", "layerDelta": 2, "levelDelta": 2 }
         ]
       },
       {
         "id": "hemo_burst", "name": "血瀑殘響", "type": "attack",
         "basePower": 6, "coinPower": 2, "coins": ["normal"],
         "hitEffects": [
-          { "type": "detonateState", "who": "target", "state": "血瀑", "damagePerLevel": 3, "consume": true,
-            "alsoApply": { "state": "延燒", "layerDelta": 2, "levelDelta": 2 } }
+          { "type": "burstResonance", "who": "target", "burst": "血瀑" }
         ]
       },
       {

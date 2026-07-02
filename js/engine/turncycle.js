@@ -175,6 +175,7 @@
     entities.forEach(function (e) {
       Object.keys(e.states).forEach(function (name) {
         const st = e.states[name];
+        if (st.isBurstTag) return; // 瀑標記持續存在，不衰減
         if (st.justAddedThisTurn) { st.justAddedThisTurn = false; return; }
         if ((st.layer || 0) > 0) Engine.addStateLayer(e, name, -1);
       });

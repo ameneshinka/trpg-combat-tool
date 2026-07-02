@@ -78,8 +78,13 @@ examples/
 |------|------|
 | `applyState` | 施加狀態：`{ who:"self"\|"target", state, layerDelta, levelDelta, isMark }` |
 | `invokeSkill` | 喚出技能：`{ skillId, targetRef:"target"\|"self" }` 繞過骰選直接打出（可為 `drawable:false`） |
-| `detonateState` | 引爆殘響：`{ who, state, damagePerLevel, consume, alsoApply:{state,layerDelta,levelDelta} }` |
+| `tremorBurst` | 震顫爆發：`{ who }` 混亂值上修＝震顫級數，然後震顫歸零（不扣血） |
+| `burstResonance` | 瀑殘響：`{ who, burst:"血瀑"\|"炎瀑"\|"荊棘瀑" }` 目標須帶該瀑標記；扣血＝混亂值上修＝⌊(震顫＋夥伴)×50%⌋，然後夥伴與震顫歸零（標記保留、可重複引爆） |
 | `heal` / `tempHp` / `focus` | 數值：`{ who, amount }` |
+
+> 「瀑」是純標記（無層/級），由 `applyState`（state 為 `血瀑`/`炎瀑`/`荊棘瀑`）貼上、持續存在，
+> 由對應殘響效果引爆。夥伴狀態：血瀑→失血、炎瀑→延燒、荊棘瀑→開裂。震顫平常只累積級數，
+> 遇 `tremorBurst`／`burstResonance` 才一次性化為混亂值上修（門檻追上當前 HP 即提早進入混亂）。
 
 效果可加 `condition`（見下）做條件式觸發。
 

@@ -102,25 +102,39 @@
         who.focus = Math.max(-40, Math.min(40, (who.focus || 0) + (eff.amount || 0)));
         log("→ [" + timingLabel + "] " + who.name + " 專注力 " + (eff.amount >= 0 ? "+" : "") + (eff.amount || 0) + "（現 " + who.focus + "）");
 
-      } else if (eff.type === "detonateState") {
-        // §8「爆發／殘響」：引爆累積的級數驅動狀態（血瀑/炎瀑/荊棘瀑…），依文本造成
-        // 正比傷害，並可附帶施加其他狀態（如延燒額外），最後消耗掉該狀態。
+      } else if (eff.type === "tremorBurst") {
+        // 震顫爆發：把累積的震顫級數一次性化為「混亂值上修」（不扣血），然後震顫歸零。
         const who = eff.who === "self" ? caster : target;
         if (!who) continue;
-        const st = Engine.getState(who, eff.state);
-        const amount = (st.level || st.layer || 0);
-        if (amount <= 0) { log("→ [" + timingLabel + "] 引爆〈" + eff.state + "〉但無累積，無效果。"); continue; }
-        if (eff.damagePerLevel) {
-          Engine.applyDirectDamage(who, amount * eff.damagePerLevel, log, "[" + timingLabel + "] 引爆" + eff.state);
+        const tremorLvl = (Engine.getState(who, "震顫").level) || 0;
+        if (tremorLvl <= 0) { log("→ [" + timingLabel + "] 震顫爆發但無累積，無效果。"); continue; }
+        log("→ [" + timingLabel + "] " + who.name + " 震顫爆發：混亂值 +" + tremorLvl + "（震顫級數）");
+        Engine.raiseNearestConfusionThreshold(who, tremorLvl, log);
+        const ts = Engine.ensureState(who, "震顫"); ts.layer = 0; ts.level = 0;
+
+      } else if (eff.type === "burstResonance") {
+        // 血瀑/炎瀑/荊棘瀑「殘響」：目標須帶對應「瀑」標記才觸發。
+        // 量 = ⌊(震顫級數 + 夥伴級數) × 50%⌋，同時扣血與上修混亂值；然後夥伴與震顫歸零。
+        // 瀑標記本身持續存在、可重複引爆。
+        const who = eff.who === "self" ? caster : target;
+        if (!who) continue;
+        const burst = eff.burst;
+        const tag = who.states[burst];
+        if (!(tag && tag.isBurstTag)) { log("→ [" + timingLabel + "] " + who.name + " 無〈" + burst + "〉標記，" + burst + "殘響無效。"); continue; }
+        const partnerName = global.Data.BURST_PARTNER[burst];
+        const partnerLvl = (Engine.getState(who, partnerName).level) || 0;
+        const tremorLvl = (Engine.getState(who, "震顫").level) || 0;
+        const amount = Math.floor((partnerLvl + tremorLvl) * 0.5);
+        log("→ [" + timingLabel + "] 引爆〈" + burst + "〉：震顫" + tremorLvl + " + " + partnerName + partnerLvl + " → ⌊" + (partnerLvl + tremorLvl) + "×50%⌋ = " + amount);
+        if (amount > 0) {
+          Engine.raiseNearestConfusionThreshold(who, amount, log);   // 先上修混亂值（可能追上HP）
+          Engine.applyDirectDamage(who, amount, log, "[" + timingLabel + "] " + burst); // 再扣血（可能跨門檻）
+        } else {
+          log("→ 累積為 0，無傷害／無混亂值變化。");
         }
-        if (eff.alsoApply) {
-          Engine.applyState(who, eff.alsoApply.state, eff.alsoApply.layerDelta || 0, eff.alsoApply.levelDelta || 0, { exemptThisTurn: !!exemptStates });
-          log("→ [" + timingLabel + "] 引爆附帶：" + who.name + " 獲得「" + eff.alsoApply.state + "」");
-        }
-        if (eff.consume !== false) {
-          const s = Engine.ensureState(who, eff.state); s.layer = 0; s.level = 0;
-          log("→ [" + timingLabel + "] 〈" + eff.state + "〉已被引爆消耗。");
-        }
+        // 夥伴與震顫歸零（瀑標記保留）
+        const ps = Engine.ensureState(who, partnerName); ps.layer = 0; ps.level = 0;
+        const ts2 = Engine.ensureState(who, "震顫"); ts2.layer = 0; ts2.level = 0;
 
       } else {
         log("→ [" + timingLabel + "] 未知效果類型：" + eff.type, "info");

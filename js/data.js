@@ -11,15 +11,21 @@
     "強壯", "虛弱", "屏息", "遲鈍", "恍惚"
   ];
   const LEVEL_DRIVEN_STATES = [
-    "凝神", "震顫", "萎靡", "延燒", "失血", "開裂", "血瀑", "炎瀑", "荊棘瀑"
+    "凝神", "震顫", "萎靡", "延燒", "失血", "開裂"
   ];
   const LAYER_CAPS = {
     "守護": 16, "易損": 16, "傷害強化": 16, "傷害弱化": 16,
     "迅捷": 10, "綁縛": 10
   };
 
+  // 「瀑」純標記（無自身層/級）：被某技能貼上、之後由對應「殘響」技能引爆。
+  // 引爆量取自 震顫 + 夥伴狀態 的級數；標記本身持續存在、可重複引爆。
+  const BURST_TAGS = ["血瀑", "炎瀑", "荊棘瀑"];
+  const BURST_PARTNER = { "血瀑": "失血", "炎瀑": "延燒", "荊棘瀑": "開裂" };
+
   function isLayerDriven(name) { return LAYER_DRIVEN_STATES.indexOf(name) !== -1; }
   function isLevelDriven(name) { return LEVEL_DRIVEN_STATES.indexOf(name) !== -1; }
+  function isBurstTag(name) { return BURST_TAGS.indexOf(name) !== -1; }
 
   // ---- 工廠函式 ----
   function makeCoin(type) {
@@ -180,8 +186,11 @@
     LAYER_DRIVEN_STATES: LAYER_DRIVEN_STATES,
     LEVEL_DRIVEN_STATES: LEVEL_DRIVEN_STATES,
     LAYER_CAPS: LAYER_CAPS,
+    BURST_TAGS: BURST_TAGS,
+    BURST_PARTNER: BURST_PARTNER,
     isLayerDriven: isLayerDriven,
     isLevelDriven: isLevelDriven,
+    isBurstTag: isBurstTag,
     makeCoin: makeCoin,
     makeSkill: makeSkill,
     makeEntity: makeEntity,

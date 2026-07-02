@@ -65,11 +65,18 @@
     if (layerDelta) addStateLayer(entity, name, layerDelta, { justAdded: exempt });
     if (levelDelta) addStateLevel(entity, name, levelDelta, { justAdded: exempt });
     if (opts.isMark) ensureState(entity, name).isMark = true;
+    // 「瀑」純標記：持續存在、無自身層/級意義、不隨回合衰減
+    if (global.Data.isBurstTag(name)) {
+      const st = ensureState(entity, name);
+      st.isMark = true; st.isBurstTag = true;
+      if ((st.layer || 0) < 1) st.layer = 1;
+    }
     return entity.states[name];
   }
   function clearZeroStates(entity) {
     Object.keys(entity.states).forEach(function (k) {
       const st = entity.states[k];
+      if (st.isBurstTag) return; // 瀑標記持續存在，不清除
       if ((st.layer || 0) <= 0 && (st.level || 0) <= 0) delete entity.states[k];
     });
   }

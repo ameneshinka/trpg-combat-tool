@@ -639,6 +639,10 @@
     const states = el("div", { cls: "states-list" });
     Object.keys(e.states).forEach(function (name) {
       const st = e.states[name];
+      if (st.isBurstTag) { // 瀑標記：純標記，只顯示名稱
+        states.appendChild(el("span", { cls: "state-chip mark", text: name }));
+        return;
+      }
       if ((st.layer || 0) <= 0 && (st.level || 0) <= 0) return;
       const chip = el("span", {
         cls: "state-chip" + (st.isMark ? " mark" : ""),
