@@ -49,29 +49,51 @@
     </div>
 
     <div id="battleSetupBlock">
-    <h2>戰鬥前設定</h2>
-    <p class="hint">貼上或編輯 JSON 格式的參戰名單（含技能庫）。可先載入範例熟悉格式。</p>
+    <h2>戰鬥前設定 — 參戰名單</h2>
     <div class="row">
       <button id="btnLoadSample">載入範例名單</button>
       <button id="btnLoadGuide">載入進階範例（建資料指南）</button>
-      <button id="btnValidateRoster">驗證 JSON</button>
+      <button id="btnClearRoster" class="danger">清空名單</button>
     </div>
-    <div class="row">
-      <span class="hint">快速插入範本：</span>
-      <button id="btnTplNpc">＋NPC</button>
-      <button id="btnTplSkill">插入技能</button>
-      <button id="btnTplPassive">插入被動</button>
-      <span class="hint">（技能/被動會插入游標位置）</span>
+
+    <!-- ============ 三欄編輯器 ============ -->
+    <div class="editor-layout">
+      <div class="pane" id="rosterPane">
+        <p class="pane-title">參戰角色</p>
+        <div id="rosterList"></div>
+        <button id="btnAddEntity" class="primary" style="width:100%; margin-top:8px;">＋ 新增角色</button>
+      </div>
+
+      <div class="pane" id="editorPane">
+        <p class="pane-title">角色編輯</p>
+        <div id="entityEditor"><p class="preview-empty">左側選擇或新增一個角色開始編輯</p></div>
+      </div>
+
+      <div class="pane" id="previewPane">
+        <p class="pane-title">即時預覽</p>
+        <div id="entityPreview"><p class="preview-empty">（尚未選擇角色）</p></div>
+        <div id="editorValidation" aria-live="polite"></div>
+      </div>
     </div>
-    <textarea id="rosterJson" spellcheck="false"></textarea>
-    <div id="rosterError" class="error"></div>
+
+    <!-- ============ 進階 JSON 模式 ============ -->
+    <details class="json-drawer" id="jsonDrawer">
+      <summary>進階 JSON 模式（完整名單，可貼上/匯出）</summary>
+      <textarea id="rosterJson" spellcheck="false" aria-label="名單 JSON"></textarea>
+      <div class="row">
+        <button id="btnApplyJson" class="primary">套用 JSON → 表單</button>
+        <button id="btnValidateRoster">驗證 JSON</button>
+      </div>
+      <div id="rosterError" class="error" role="alert"></div>
+    </details>
 
     <h3>PC 槽位成長順序（§4.1）</h3>
-    <p class="hint">輸入 PC 的 id，以逗號分隔，依序輪流 +1 槽位（例：pc_a,pc_b,pc_c）</p>
-    <input type="text" id="pcGrowthOrder" placeholder="pc_a,pc_b,pc_c">
+    <p class="hint">依此順序輪流每回合 +1 槽位（用 ▲▼ 調整）。清單由名單中的 PC 自動生成。</p>
+    <div id="pcOrderList" class="order-list"></div>
 
-    <div class="row">
-      <button id="btnStartBattle" class="primary">開始戰鬥</button>
+    <div class="row" style="margin-top:16px;">
+      <button id="btnStartBattle" class="primary" style="min-width:200px;">開始戰鬥</button>
+      <span id="startBattleError" class="error" role="alert"></span>
     </div>
     </div><!-- /battleSetupBlock -->
   </section>
@@ -103,6 +125,7 @@
 <script src="js/engine/triggers.js?v=2"></script>
 <script src="js/engine/turncycle.js?v=2"></script>
 <script src="js/ui.js?v=2"></script>
+<script src="js/editor.js?v=1"></script>
 <script src="js/app.js?v=2"></script>
 </body>
 </html>

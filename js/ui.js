@@ -692,4 +692,6 @@
   }
 
   UI._internal = { renderEntities: renderEntities };
+  // 供編輯器即時預覽重用（readOnly=true 時不含 KP 調整面板）
+  UI.renderEntityCard = renderEntityCard;
 })(window);

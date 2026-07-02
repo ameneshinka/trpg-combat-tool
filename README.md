@@ -16,7 +16,9 @@ python -m http.server 8731
 
 - 機率加權硬幣由程式自動擲；其餘骰（技能抽選 1d6×2、傷害骰、凝神 1d20）為手動輸入欄位。
 - 每張角色卡上有 KP 手動調整面板（設 HP／專注力／套用任意狀態層級）。
-- NPC／技能／被動／印記透過設定畫面的 JSON 名單定義，見 `examples/npc-guide.json`。
+- **角色／技能／效果／被動／形態轉換全部用表單編輯**（三欄：清單／表單／即時預覽），
+  草稿自動儲存；「進階 JSON 模式」drawer 供貼上/匯出整份名單，與表單雙向同步。
+  資料格式見下方參考與 `examples/npc-guide.json`。
 
 ## 第二階段：跨裝置連線（KP 端權威）
 
@@ -56,7 +58,8 @@ js/
   data.js             資料模型工廠 + 狀態目錄 + 範例名單
   firebase-config.js  ← 使用者填入 Firebase 設定
   sync.js             同步層（Realtime Database，用到才載入 SDK）
-  ui.js               面板/紀錄渲染 + 三模式（solo/kp/player）+ 表單
+  ui.js               面板/紀錄渲染 + 三模式（solo/kp/player）+ 戰鬥表單
+  editor.js           表單式名單編輯器（三欄、效果/條件/被動建構器、即時預覽、JSON 雙向同步）
   app.js              設定畫面 + 模式切換 + 重連
   engine/
     slotmap.js        條件直譯器、slotMap 結算、抽選、有效威力/DEX
