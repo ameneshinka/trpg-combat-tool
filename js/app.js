@@ -64,6 +64,8 @@
         createdAt: Date.now(), kpClientId: cid, mode: "prototype"
       }).then(function () {
         window.UI.startBattleAsKP({ entities: rosterData }, order, kpRoomCode, cid);
+      }).catch(function (e) {
+        alert("建立房間失敗：" + (e && e.message ? e.message : e) + "\n（若顯示 Permission denied，請確認 Firebase 安全規則已發布，見 README）");
       });
     }
   }
@@ -81,6 +83,8 @@
       $("#joinStatus").textContent = "已連上房間 " + code + "。";
       window.UI.startAsPlayer(code, cid, []);
       if (window.UI.beginPlayerJoin) window.UI.beginPlayerJoin(code, cid, name);
+    }).catch(function (e) {
+      $("#joinStatus").textContent = "連線失敗：" + (e && e.message ? e.message : e) + "（請確認 Firebase 規則已發布）";
     });
   }
 

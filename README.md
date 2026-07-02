@@ -27,13 +27,19 @@ python -m http.server 8731
 ### Firebase 設定（一次性）
 
 1. 到 <https://console.firebase.google.com> 建立專案。
-2. 建立 **Realtime Database**（測試模式即可）。
+2. 建立 **Realtime Database**。
 3. 專案設定 → 你的 Web 應用程式 → 複製 config，填進 `js/firebase-config.js`
    （尤其是 `databaseURL`）。
-4. 未填 config 時，連線模式自動停用，單機照常可用。
+4. **發布安全規則**：Firebase Console → Realtime Database → 「規則」分頁 →
+   貼上本 repo 的 [`database.rules.json`](database.rules.json) 內容 → 發布。
+   （鎖定模式下連線功能會整個 Permission denied；全開模式則任何人可讀寫整個資料庫——
+   這份規則是兩者的中間值，也是連線功能能動的前提。）
+5. 未填 config 時，連線模式自動停用，單機照常可用。
 
-> ⚠ **原型階段安全性**：目前規則寬鬆（有房號即可讀寫），任何知道房號者都能讀寫該房。
-> 適合 Discord 語音跑團的信任情境，但**請勿放真實隱私資料**。嚴格 Auth 規則留待後續。
+> **安全模型（無登入、房號即密鑰）**：規則只開放 `/rooms/{房號}` 底下的讀寫，
+> 房號格式受驗證、房間清單無法被列舉（猜不到房號就進不來）、資料結構與欄位長度受限制。
+> 知道房號的人可以讀寫該房——適合 Discord 語音跑團的信任情境，
+> **請勿放真實隱私資料**。更嚴格的 Anonymous Auth + KP 專屬寫入權限留待後續。
 
 ### 使用流程
 

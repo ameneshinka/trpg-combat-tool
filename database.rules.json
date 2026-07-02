@@ -1,0 +1,49 @@
+{
+  "rules": {
+    "rooms": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$code.matches(/^[A-Z0-9]{4,8}$/)",
+
+        "meta": {
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "kpClientId": { ".validate": "newData.isString() && newData.val().length <= 32" },
+          "mode": { ".validate": "newData.isString() && newData.val().length <= 32" },
+          "$other": { ".validate": false }
+        },
+
+        "state": {
+          "stepId": { ".validate": "newData.isNumber()" },
+          "phaseLabel": { ".validate": "newData.isString() && newData.val().length <= 300" },
+          "battleState": { ".validate": "newData.hasChildren()" },
+          "pendingReq": { ".validate": true },
+          "$other": { ".validate": false }
+        },
+
+        "players": {
+          "$cid": {
+            ".validate": "$cid.matches(/^c_[a-z0-9]{4,16}$/)",
+            "pcIds": {
+              "$i": { ".validate": "newData.isString() && newData.val().length <= 64" }
+            },
+            "displayName": { ".validate": "newData.isString() && newData.val().length <= 50" },
+            "lastSeen": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "inputs": {
+          "$cid": {
+            ".validate": "$cid.matches(/^c_[a-z0-9]{4,16}$/)",
+            "stepId": { ".validate": "newData.isNumber()" },
+            "value": { ".validate": true },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}
