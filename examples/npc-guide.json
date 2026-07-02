@@ -152,5 +152,39 @@
       }
     ],
     "slotMap": { "A": "hemo_cut", "B": "hemo_burst", "C": "hemo_guard" }
+  },
+
+  {
+    "id": "npc_pyrothorn", "name": "炎荊術士",
+    "isPC": false, "hp": 55, "dex": 11,
+    "attributes": { "STR": 10, "INT": 13, "CON": 12, "SIZ": 10, "LUK": 9 },
+    "skillLibrary": [
+      {
+        "id": "pt_ignite", "name": "焚身棘刺", "type": "attack",
+        "basePower": 7, "coinPower": 2, "coins": ["red", "normal"],
+        "hitEffects": [
+          { "type": "applyState", "who": "target", "state": "炎瀑", "isMark": true },
+          { "type": "applyState", "who": "target", "state": "荊棘瀑", "isMark": true },
+          { "type": "applyState", "who": "target", "state": "延燒", "layerDelta": 6, "levelDelta": 3 },
+          { "type": "applyState", "who": "target", "state": "開裂", "layerDelta": 6, "levelDelta": 3 },
+          { "type": "applyState", "who": "target", "state": "震顫", "layerDelta": 6, "levelDelta": 4 }
+        ]
+      },
+      {
+        "id": "pt_flame", "name": "炎瀑殘響", "type": "attack",
+        "basePower": 6, "coinPower": 2, "coins": ["normal"],
+        "hitEffects": [
+          { "type": "burstResonance", "who": "target", "burst": "炎瀑" }
+        ]
+      },
+      {
+        "id": "pt_thorn", "name": "荊棘殘響", "type": "attack",
+        "basePower": 6, "coinPower": 2, "coins": ["normal"],
+        "hitEffects": [
+          { "type": "burstResonance", "who": "target", "burst": "荊棘瀑" }
+        ]
+      }
+    ],
+    "slotMap": { "A": "pt_ignite", "B": "pt_flame", "C": "pt_thorn" }
   }
 ]
