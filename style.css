@@ -290,6 +290,30 @@ button.icon-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: non
 .coin-chip button { min-height: 0; min-width: 0; padding: 0 3px; border: none; background: transparent; color: inherit; font-size: 12px; line-height: 1; }
 .coin-chip button:hover { background: rgba(255,255,255,.12); border-radius: 4px; }
 
+/* 句子式建構器：文字與控件行內混排 */
+.sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0;
+  line-height: 1.9;
+}
+.sentence .s-text { color: var(--color-foreground); }
+.sentence select, .sentence .inline-sel,
+.sentence input.inline-num, .sentence input.inline-text,
+.sentence .state-select-holder select, .sentence .state-select-holder input {
+  min-height: 34px;
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+}
+.sentence input.inline-num { width: 76px; }
+.sentence input.inline-text { width: 160px; }
+.sentence .icon-btn { margin-left: auto; }
+.state-select-holder { display: inline-flex; }
+select optgroup { color: var(--color-accent-fg); font-style: normal; }
+select option { color: var(--color-foreground); }
+
 /* 進階 JSON drawer */
 .json-drawer { margin-top: var(--space-4); }
 .json-drawer > summary {

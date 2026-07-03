@@ -38,35 +38,36 @@
     return b;
   }
 
-  // ---------------- 詞彙 ----------------
-  const WHO_OPTS = [{ v: "self", t: "自身" }, { v: "target", t: "目標" }];
+  // ---------------- 詞彙（口語化） ----------------
+  const WHO_OPTS = [{ v: "self", t: "自己" }, { v: "target", t: "對方" }];
   const EFFECT_TYPES = {
-    applyState: { label: "施加狀態" },
-    invokeSkill: { label: "喚出技能" },
-    burstResonance: { label: "瀑殘響（引爆）" },
-    tremorBurst: { label: "震顫爆發" },
+    applyState: { label: "施加狀態／印記" },
+    invokeSkill: { label: "直接使出另一招" },
+    burstResonance: { label: "引爆瀑（殘響）" },
+    tremorBurst: { label: "引爆震顫（爆發）" },
     heal: { label: "回復 HP" },
-    tempHp: { label: "臨時生命值" },
-    focus: { label: "專注力增減" }
+    tempHp: { label: "給臨時生命值" },
+    focus: { label: "增減專注力" }
   };
+  // 條件動詞（會嵌在句子裡，位置依型別不同）
   const COND_TYPES = {
-    hasState: "帶有狀態",
-    stateLayerEquals: "狀態層數等於",
-    stateLevelEquals: "狀態級數等於",
+    hasState: "帶有",
+    stateLayerEquals: "的層數恰好等於",
+    stateLevelEquals: "的級數恰好等於",
     always: "永遠成立"
   };
   const TRIGGER_OPTS = [
-    { v: "turnStart", t: "回合開始" },
-    { v: "turnEnd", t: "回合結束" },
-    { v: "interceptOverride", t: "攔截例外（可攔玩家）" }
+    { v: "turnStart", t: "每回合開始時" },
+    { v: "turnEnd", t: "每回合結束時" },
+    { v: "interceptOverride", t: "攔截例外（可攔打向玩家的攻擊）" }
   ];
   const TARGET_OPTS = [
-    { v: "self", t: "自身" },
-    { v: "randomEnemy", t: "隨機敵人" },
-    { v: "randomEnemyWithout", t: "隨機『無某狀態』敵人" },
-    { v: "lowestHpEnemy", t: "血量最低敵人" },
+    { v: "self", t: "自己" },
+    { v: "randomEnemy", t: "隨機一個敵人" },
+    { v: "randomEnemyWithout", t: "隨機一個「還沒帶某狀態」的敵人" },
+    { v: "lowestHpEnemy", t: "血量最低的敵人" },
     { v: "allEnemies", t: "全體敵人" },
-    { v: "randomAlly", t: "隨機隊友" }
+    { v: "randomAlly", t: "隨機一個隊友" }
   ];
 
   // ---------------- 狀態 ----------------
@@ -239,6 +240,129 @@
     return { root: d, body: body };
   }
 
+  // ---------------- 句子式建構器小工具 ----------------
+  // sentence("對", sel, "施加", num, "層") → 行內混排的可讀句子
+  function sentence() {
+    const w = el("div", { cls: "sentence" });
+    for (let i = 0; i < arguments.length; i++) {
+      const p = arguments[i];
+      if (p === null || p === undefined) continue;
+      if (typeof p === "string") w.appendChild(el("span", { cls: "s-text", text: p }));
+      else w.appendChild(p);
+    }
+    return w;
+  }
+  function inlineNum(obj, key, opts) {
+    const i = bindNum(obj, key, opts);
+    i.classList.add("inline-num");
+    if (opts && opts.aria) i.setAttribute("aria-label", opts.aria);
+    return i;
+  }
+
+  // ---------------- 印記自動蒐集 ----------------
+  // 走訪整份名單，蒐集所有被引用的「自訂狀態／印記」名（不在通用清單者）
+  function walkCond(c, cb) {
+    if (!c) return;
+    if (c.type === "not") return walkCond(c.cond, cb);
+    if (c.type === "and" || c.type === "or") return (c.conds || []).forEach(function (x) { walkCond(x, cb); });
+    if (c.state) cb(c.state);
+  }
+  function collectCustomStates() {
+    const generic = knownStates();
+    const byOwner = {}; // entityIndex -> Set(names)
+    roster.forEach(function (e, idx) {
+      const found = {};
+      const add = function (name) { if (name && generic.indexOf(name) === -1) found[name] = true; };
+      Object.keys(e.states || {}).forEach(add);
+      (e.skillLibrary || []).forEach(function (sk) {
+        ["useEffects", "hitEffects"].forEach(function (k) {
+          (sk[k] || []).forEach(function (eff) {
+            if (eff.type === "applyState") add(eff.state);
+            walkCond(eff.condition, add);
+          });
+        });
+        (sk.conditions || []).forEach(function (c) { walkCond(c.condition, add); });
+      });
+      (e.slotMapRules || []).forEach(function (r) { walkCond(r.condition, add); });
+      (e.passives || []).forEach(function (p) {
+        walkCond(p.condition, add);
+        add(p.targetState);
+        (p.effects || []).forEach(function (eff) {
+          if (eff.type === "applyState") add(eff.state);
+          walkCond(eff.condition, add);
+        });
+      });
+      byOwner[idx] = Object.keys(found);
+    });
+    return byOwner;
+  }
+
+  // 狀態下拉：通用狀態／本角色的印記／其他角色的印記 分組 + 「＋新印記…」就地輸入
+  function stateSelect(obj, key, opts) {
+    opts = opts || {};
+    const holder = el("span", { cls: "state-select-holder" });
+
+    function build() {
+      holder.innerHTML = "";
+      const cur = obj[key] || "";
+      const byOwner = collectCustomStates();
+      const own = (selected >= 0 && byOwner[selected]) ? byOwner[selected] : [];
+      const others = [];
+      Object.keys(byOwner).forEach(function (idx) {
+        if (Number(idx) === selected) return;
+        byOwner[idx].forEach(function (n) {
+          if (own.indexOf(n) === -1 && others.indexOf(n) === -1) others.push(n);
+        });
+      });
+
+      const s = el("select");
+      s.setAttribute("aria-label", opts.aria || "狀態名");
+      if (!cur) {
+        const ph = el("option", { text: "（選狀態…）" }); ph.value = ""; s.appendChild(ph);
+      } else if (knownStates().indexOf(cur) === -1 && own.indexOf(cur) === -1 && others.indexOf(cur) === -1) {
+        const o = el("option", { text: cur }); o.value = cur; s.appendChild(o);
+      }
+      function group(label, names) {
+        if (!names.length) return;
+        const g = el("optgroup"); g.label = label;
+        names.forEach(function (n) { const o = el("option", { text: n }); o.value = n; g.appendChild(o); });
+        s.appendChild(g);
+      }
+      group("通用狀態", knownStates());
+      group("本角色的印記", own);
+      group("其他角色的印記", others);
+      const nw = el("option", { text: "＋ 新印記（自己命名）…" }); nw.value = "__new__"; s.appendChild(nw);
+      s.value = cur;
+
+      s.addEventListener("change", function () {
+        if (s.value === "__new__") {
+          // 換成就地輸入框
+          const inp = el("input"); inp.type = "text"; inp.placeholder = "印記名（例：lady_gaze）";
+          inp.setAttribute("aria-label", "新印記名稱");
+          inp.classList.add("inline-text");
+          holder.innerHTML = ""; holder.appendChild(inp);
+          inp.focus();
+          let done = false;
+          function commitNew() {
+            if (done) return; done = true;
+            const v = inp.value.trim();
+            if (v) { obj[key] = v; if (opts.onSet) opts.onSet(); else changed(true); }
+            else build(); // 取消 → 還原下拉
+          }
+          inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); commitNew(); } });
+          inp.addEventListener("blur", commitNew);
+          return;
+        }
+        obj[key] = s.value;
+        // onSet：條件列等「檢視模型」需經 commit 寫回真模型時使用
+        if (opts.onSet) opts.onSet(); else changed(true); // 重繪讓其他下拉同步取得新引用
+      });
+      holder.appendChild(s);
+    }
+    build();
+    return holder;
+  }
+
   // ---------------- 左欄：角色清單 ----------------
   function renderRosterList() {
     const box = $("#rosterList");
@@ -381,7 +505,7 @@
     const sum = el("summary", { cls: "sub-card-head" });
     sum.style.cursor = "pointer"; sum.style.listStyle = "none";
     sum.appendChild(el("span", { cls: "title", text: (sk.name || sk.id) + (sk.drawable === false ? "（隱藏技）" : "") }));
-    sum.appendChild(el("span", { cls: "hint", text: (sk.type === "defense" ? "防禦" : "攻擊") + "・基" + (sk.basePower || 0) + "/幣+" + (sk.coinPower || 0) + "・" + (sk.coins || []).length + "枚" }));
+    sum.appendChild(el("span", { cls: "hint", text: (sk.type === "defense" ? "防禦" : "攻擊") + "｜基礎" + (sk.basePower || 0) + "｜每枚+" + (sk.coinPower || 0) + "｜" + (sk.coins || []).length + "枚硬幣" }));
     const dupB = iconBtn("copy", "複製技能", function (ev) {
       ev.preventDefault();
       const copy = deepClone(sk);
@@ -405,7 +529,7 @@
     grid.appendChild(fieldWrap("技能 ID", bindText(sk, "id")));
     grid.appendChild(fieldWrap("類型", bindSelect(sk, "type", [{ v: "attack", t: "攻擊" }, { v: "defense", t: "防禦" }])));
     grid.appendChild(fieldWrap("基礎威力", bindNum(sk, "basePower", { min: 0 })));
-    grid.appendChild(fieldWrap("硬幣威力 (+N)", bindNum(sk, "coinPower", { min: 0 })));
+    grid.appendChild(fieldWrap("每枚硬幣加成", bindNum(sk, "coinPower", { min: 0 }), "每擲出一枚正面，威力就加這麼多"));
     body.appendChild(grid);
 
     // drawable 反向呈現：勾＝隱藏技
@@ -416,30 +540,34 @@
       changed(false);
     });
     hid.appendChild(hc);
-    hid.appendChild(el("span", { text: " 隱藏技（不進抽選池，只能被形態轉換解鎖或 invokeSkill 喚出）" }));
+    hid.appendChild(el("span", { text: " 隱藏技（平常骰不到；要靠「形態轉換」換上、或被「直接使出另一招」打出）" }));
     body.appendChild(hid);
 
     // 硬幣（有序）
     body.appendChild(el("div", { cls: "hint", text: "硬幣（順序＝拚輸時的損幣順序）" }));
     body.appendChild(renderCoinRow(sk));
 
-    // 條件式威力（render 不動模型）
+    // 情境加成（render 不動模型）
     const condSec = el("div", { cls: "sub-sub" });
-    condSec.appendChild(el("div", { cls: "hint", text: "條件式威力（例：目標有某印記 → 威力+N）" }));
+    condSec.appendChild(el("div", { cls: "hint", text: "情境加成——滿足條件時這招威力變化（例：對方帶有某印記時更痛）" }));
     (sk.conditions || []).forEach(function (c, ci) {
       const row = el("div", { cls: "sub-card" });
       const head = el("div", { cls: "sub-card-head" });
-      head.appendChild(el("span", { cls: "title", text: "條件威力 #" + (ci + 1) }));
-      head.appendChild(iconBtn("x", "刪除此條件威力", function () { sk.conditions.splice(ci, 1); if (!sk.conditions.length) delete sk.conditions; changed(true); }, "danger"));
+      head.appendChild(el("span", { cls: "title", text: "情境加成 #" + (ci + 1) }));
+      head.appendChild(iconBtn("x", "刪除這條情境加成", function () { sk.conditions.splice(ci, 1); if (!sk.conditions.length) delete sk.conditions; changed(true); }, "danger"));
       row.appendChild(head);
+      row.appendChild(el("div", { cls: "hint", text: "當…" }));
       row.appendChild(renderConditionBuilder(c, "condition", { required: true }));
-      const g = el("div", { cls: "field-grid" });
-      g.appendChild(fieldWrap("基礎威力 Δ", bindNum(c, "basePowerDelta", { deleteWhenEmpty: true })));
-      g.appendChild(fieldWrap("硬幣威力 Δ", bindNum(c, "coinPowerDelta", { deleteWhenEmpty: true })));
-      row.appendChild(g);
+      row.appendChild(sentence(
+        "…成立時，基礎威力",
+        inlineNum(c, "basePowerDelta", { deleteWhenEmpty: true, aria: "基礎威力增減" }),
+        "、每枚硬幣加成",
+        inlineNum(c, "coinPowerDelta", { deleteWhenEmpty: true, aria: "每枚硬幣加成增減" }),
+        "（正加負減，留空＝不變）"
+      ));
       condSec.appendChild(row);
     });
-    const addCond = el("button", { text: "＋ 條件式威力" });
+    const addCond = el("button", { text: "＋ 情境加成" });
     addCond.onclick = function () {
       if (!sk.conditions) sk.conditions = [];
       sk.conditions.push({ condition: { type: "hasState", who: "target", state: "", minLayer: 1 }, basePowerDelta: 0 });
@@ -449,8 +577,8 @@
     body.appendChild(condSec);
 
     // 效果
-    body.appendChild(renderEffectList(e, sk, "useEffects", "使用時效果（拚點前，不論命中）"));
-    body.appendChild(renderEffectList(e, sk, "hitEffects", "命中時效果（攻擊命中後／防禦成功時）"));
+    body.appendChild(renderEffectList(e, sk, "useEffects", "出招時（不論拚點輸贏都會發生）"));
+    body.appendChild(renderEffectList(e, sk, "hitEffects", "命中時（打中對方／防禦成功後發生）"));
 
     d.appendChild(body);
     return d;
@@ -536,30 +664,46 @@
     head.appendChild(iconBtn("x", "刪除效果", function () { owner[key].splice(i, 1); if (!owner[key].length) delete owner[key]; changed(true); }, "danger"));
     card.appendChild(head);
 
-    const g = el("div", { cls: "field-grid" });
     const t = eff.type;
-    // who 顯示預設須對齊引擎預設：瀑/震顫爆發缺 who＝目標，其餘缺 who＝自身
+    // who 顯示預設須對齊引擎預設：瀑/震顫爆發缺 who＝對方，其餘缺 who＝自己
     const whoDef = (t === "burstResonance" || t === "tremorBurst") ? "target" : "self";
-    g.appendChild(fieldWrap("對象", bindSelect(eff, "who", WHO_OPTS, { def: whoDef })));
+    const whoSel = bindSelect(eff, "who", WHO_OPTS, { def: whoDef });
+    whoSel.setAttribute("aria-label", "效果對象");
+    whoSel.classList.add("inline-sel");
+
     if (t === "applyState") {
-      g.appendChild(fieldWrap("狀態名", bindText(eff, "state", { list: "dl-states", placeholder: "守護／延燒／自訂印記…" })));
-      g.appendChild(fieldWrap("層數 Δ", bindNum(eff, "layerDelta", { deleteWhenEmpty: true })));
-      g.appendChild(fieldWrap("級數 Δ", bindNum(eff, "levelDelta", { deleteWhenEmpty: true })));
-      card.appendChild(g);
-      card.appendChild(bindCheck(eff, "isMark", "標記為印記（純標籤；瀑標記會自動視為印記）", { deleteWhenFalse: true }));
+      card.appendChild(sentence(
+        "對", whoSel, "施加",
+        inlineNum(eff, "layerDelta", { deleteWhenEmpty: true, aria: "層數" }), "層",
+        inlineNum(eff, "levelDelta", { deleteWhenEmpty: true, aria: "級數" }), "級的",
+        stateSelect(eff, "state", { aria: "要施加的狀態" })
+      ));
+      card.appendChild(bindCheck(eff, "isMark", "這是印記（純標籤，效果寫在讀取它的技能裡；瀑標記會自動視為印記）", { deleteWhenFalse: true }));
     } else if (t === "invokeSkill") {
-      const opts = entity.skillLibrary.map(function (s) { return { v: s.id, t: (s.name || s.id) + (s.drawable === false ? "（隱藏）" : "") }; });
-      g.appendChild(fieldWrap("喚出技能", bindSelect(eff, "skillId", opts.length ? opts : [{ v: "", t: "（無技能）" }])));
-      g.appendChild(fieldWrap("打向", bindSelect(eff, "targetRef", [{ v: "target", t: "原目標／對手" }, { v: "self", t: "自身" }], { def: "target" })));
-      card.appendChild(g);
+      const opts = entity.skillLibrary.map(function (s) { return { v: s.id, t: (s.name || s.id) + (s.drawable === false ? "（隱藏技）" : "") }; });
+      const skillSel = bindSelect(eff, "skillId", opts.length ? opts : [{ v: "", t: "（還沒有技能）" }]);
+      skillSel.setAttribute("aria-label", "要使出的技能"); skillSel.classList.add("inline-sel");
+      const dirSel = bindSelect(eff, "targetRef", [{ v: "target", t: "原本的對手" }, { v: "self", t: "自己" }], { def: "target" });
+      dirSel.setAttribute("aria-label", "打向誰"); dirSel.classList.add("inline-sel");
+      card.appendChild(sentence("直接使出", skillSel, "，打向", dirSel, "（不用骰選，直接結算）"));
     } else if (t === "burstResonance") {
-      g.appendChild(fieldWrap("引爆哪種瀑", bindSelect(eff, "burst", global.Data.BURST_TAGS.map(function (b) { return { v: b, t: b + "（夥伴：" + global.Data.BURST_PARTNER[b] + "）" }; }))));
-      card.appendChild(g);
+      const burstSel = bindSelect(eff, "burst", global.Data.BURST_TAGS.map(function (b) { return { v: b, t: b }; }));
+      burstSel.setAttribute("aria-label", "引爆哪種瀑"); burstSel.classList.add("inline-sel");
+      const partner = global.Data.BURST_PARTNER[eff.burst || "血瀑"];
+      card.appendChild(sentence(
+        "引爆", whoSel, "身上的", burstSel,
+        "（扣血與混亂值上修都是 ⌊(震顫＋" + partner + ")×50%⌋，之後兩者歸零、標記保留）"
+      ));
     } else if (t === "tremorBurst") {
-      card.appendChild(g);
-    } else { // heal/tempHp/focus
-      g.appendChild(fieldWrap("數量", bindNum(eff, "amount")));
-      card.appendChild(g);
+      card.appendChild(sentence(
+        "引爆", whoSel, "累積的震顫（混亂值上修＝震顫級數，之後震顫歸零，不扣血）"
+      ));
+    } else if (t === "heal") {
+      card.appendChild(sentence("讓", whoSel, "回復", inlineNum(eff, "amount", { aria: "回復量" }), "點 HP"));
+    } else if (t === "tempHp") {
+      card.appendChild(sentence("給", whoSel, inlineNum(eff, "amount", { aria: "臨時生命值" }), "點臨時生命值（回合結束消失）"));
+    } else { // focus
+      card.appendChild(sentence("讓", whoSel, "的專注力增減", inlineNum(eff, "amount", { aria: "專注力增減量" }), "點（正加負減）"));
     }
 
     // 附加條件（可選）
@@ -572,7 +716,7 @@
       changed(true);
     });
     condToggle.appendChild(cc);
-    condToggle.appendChild(el("span", { text: " 附加條件（條件成立才觸發）" }));
+    condToggle.appendChild(el("span", { text: " 只在特定條件下才觸發（加上條件）" }));
     card.appendChild(condToggle);
     if (hasCond) card.appendChild(renderConditionBuilder(eff, "condition", {}));
 
@@ -651,7 +795,9 @@
 
     const ctrlRow = el("div", { cls: "row" });
     const modeSel = el("select");
-    [["single", "單一條件"], ["and", "全部成立 (and)"], ["or", "任一成立 (or)"]].forEach(function (p) {
+    modeSel.setAttribute("aria-label", "條件組合方式");
+    modeSel.classList.add("inline-sel");
+    [["single", "只需這一個條件"], ["and", "以下全部成立才算"], ["or", "以下任一成立就算"]].forEach(function (p) {
       const o = el("option", { text: p[1] }); o.value = p[0]; modeSel.appendChild(o);
     });
     modeSel.value = mode;
@@ -663,7 +809,7 @@
     const negLab = el("label", { cls: "row" }); negLab.style.margin = "0";
     const negC = el("input"); negC.type = "checkbox"; negC.checked = negated;
     negC.addEventListener("change", function () { negated = negC.checked; commit(); });
-    negLab.appendChild(negC); negLab.appendChild(el("span", { text: " 反轉 (not)" }));
+    negLab.appendChild(negC); negLab.appendChild(el("span", { text: " 反過來（上面不成立時才算成立）" }));
     ctrlRow.appendChild(modeSel); ctrlRow.appendChild(negLab);
     wrap.appendChild(ctrlRow);
 
@@ -671,7 +817,7 @@
       wrap.appendChild(renderSimpleCondRow(sc, simples, i, mode, commit));
     });
     if (mode !== "single") {
-      const add = el("button", { text: "＋ 子條件" });
+      const add = el("button", { text: "＋ 再加一個條件" });
       add.onclick = function () { simples.push({ type: "hasState", who: "self", state: "", minLayer: 1 }); commit(); };
       wrap.appendChild(add);
     }
@@ -679,7 +825,6 @@
   }
 
   function renderSimpleCondRow(sc, arr, i, mode, commit) {
-    const g = el("div", { cls: "field-grid" });
     const typeSel = el("select");
     Object.keys(COND_TYPES).forEach(function (t) {
       const o = el("option", { text: COND_TYPES[t] }); o.value = t; typeSel.appendChild(o);
@@ -693,36 +838,35 @@
       arr[i] = nc;
       commit();
     });
-    g.appendChild(fieldWrap("條件類型", typeSel));
+    typeSel.setAttribute("aria-label", "條件種類");
+    typeSel.classList.add("inline-sel");
 
-    if (sc.type !== "always") {
-      g.appendChild(fieldWrap("誰身上", (function () {
-        const s = el("select");
-        WHO_OPTS.forEach(function (o) { const op = el("option", { text: o.t }); op.value = o.v; s.appendChild(op); });
-        s.value = sc.who || "self";
-        s.addEventListener("change", function () { sc.who = s.value; commit(); });
-        return s;
-      })()));
-      g.appendChild(fieldWrap("狀態名", (function () {
-        const inp = el("input"); inp.type = "text"; inp.setAttribute("list", "dl-states");
-        inp.value = sc.state || "";
-        inp.addEventListener("input", function () { sc.state = inp.value; });
-        inp.addEventListener("blur", function () { commit(); });
-        return inp;
-      })()));
-      if (sc.type === "hasState") {
-        g.appendChild(fieldWrap("最低層數", numQuick(sc, "minLayer", commit)));
-        g.appendChild(fieldWrap("最低級數（可空）", numQuick(sc, "minLevel", commit, true)));
-      } else {
-        g.appendChild(fieldWrap("等於值", numQuick(sc, "value", commit)));
-      }
+    const whoSel = (function () {
+      const s = el("select");
+      s.setAttribute("aria-label", "誰身上");
+      s.classList.add("inline-sel");
+      WHO_OPTS.forEach(function (o) { const op = el("option", { text: o.t }); op.value = o.v; s.appendChild(op); });
+      s.value = sc.who || "self";
+      s.addEventListener("change", function () { sc.who = s.value; commit(); });
+      return s;
+    })();
+    const stateSel = stateSelect(sc, "state", { aria: "哪個狀態", onSet: commit });
+
+    let row;
+    if (sc.type === "always") {
+      row = sentence(typeSel, "（不設任何限制）");
+    } else if (sc.type === "hasState") {
+      const n1 = numQuick(sc, "minLayer", commit); n1.classList.add("inline-num"); n1.setAttribute("aria-label", "至少幾層");
+      const n2 = numQuick(sc, "minLevel", commit, true); n2.classList.add("inline-num"); n2.setAttribute("aria-label", "至少幾級可留空");
+      row = sentence(whoSel, "身上", typeSel, stateSel, "，至少", n1, "層、", n2, "級（級留空＝不限）");
+    } else {
+      const nv = numQuick(sc, "value", commit); nv.classList.add("inline-num"); nv.setAttribute("aria-label", "等於多少");
+      row = sentence(whoSel, "身上", stateSel, typeSel, nv);
     }
     if (mode !== "single") {
-      const rm = iconBtn("x", "刪除子條件", function () { arr.splice(i, 1); if (!arr.length) arr.push({ type: "always" }); commit(); }, "danger");
-      const w = el("div", { cls: "field" }); w.appendChild(el("label", { text: " " })); w.appendChild(rm);
-      g.appendChild(w);
+      row.appendChild(iconBtn("x", "刪除這個子條件", function () { arr.splice(i, 1); if (!arr.length) arr.push({ type: "always" }); commit(); }, "danger"));
     }
-    return g;
+    return row;
   }
   function numQuick(obj, key, commit, deleteWhenEmpty) {
     const i = el("input"); i.type = "number";
@@ -737,7 +881,7 @@
 
   // ---- slotMap ----
   function renderSlotMapSection(e) {
-    const sec = detailsSec("slotmap", "技能對照表（slotMap）", "1d6：1-3→A、4-5→B、6→C", true);
+    const sec = detailsSec("slotmap", "骰面對應（1d6 抽技能）", "骰到 1–3 用 A、4–5 用 B、6 用 C", true);
     const sm = e.slotMap || {};
     const g = el("div", { cls: "field-grid" });
     ["A", "B", "C"].forEach(function (slot) {
@@ -762,28 +906,32 @@
   // ---- slotMapRules ----
   function renderSlotMapRulesSection(e) {
     const rules = e.slotMapRules || [];
-    const sec = detailsSec("smrules", "形態轉換規則（slotMapRules）", "（" + rules.length + "）", rules.length > 0);
+    const sec = detailsSec("smrules", "形態轉換（換招規則）", "（" + rules.length + "）", rules.length > 0);
+    sec.body.appendChild(el("div", { cls: "hint", text: "每回合開始時檢查：條件成立就把某個骰面槽位換成另一招（可換上隱藏技＝解鎖）。" }));
     rules.forEach(function (r, ri) {
       const card = el("div", { cls: "sub-card" });
       const head = el("div", { cls: "sub-card-head" });
-      head.appendChild(el("span", { cls: "title", text: "規則 #" + (ri + 1) }));
-      head.appendChild(iconBtn("x", "刪除規則", function () {
+      head.appendChild(el("span", { cls: "title", text: "換招規則 #" + (ri + 1) }));
+      head.appendChild(iconBtn("x", "刪除這條換招規則", function () {
         e.slotMapRules.splice(ri, 1);
         if (!e.slotMapRules.length) delete e.slotMapRules;
         changed(true);
       }, "danger"));
       card.appendChild(head);
-      card.appendChild(el("div", { cls: "hint", text: "條件成立時，把槽位改指向另一技能（回合開始結算，高 priority 後蓋低）" }));
+      card.appendChild(el("div", { cls: "hint", text: "當…" }));
       card.appendChild(renderConditionBuilder(r, "condition", { required: true }));
-      const g = el("div", { cls: "field-grid" });
-      g.appendChild(fieldWrap("改哪個槽位", bindSelect(r, "slot", [{ v: "A", t: "A" }, { v: "B", t: "B" }, { v: "C", t: "C" }])));
-      const opts = (e.skillLibrary || []).map(function (sk) { return { v: sk.id, t: (sk.name || sk.id) + (sk.drawable === false ? "（隱藏）" : "") }; });
-      g.appendChild(fieldWrap("改成哪個技能", bindSelect(r, "setSkillId", opts.length ? opts : [{ v: "", t: "（無技能）" }])));
-      g.appendChild(fieldWrap("priority", bindNum(r, "priority", { deleteWhenEmpty: true })));
-      card.appendChild(g);
+      const slotSel = bindSelect(r, "slot", [{ v: "A", t: "A（骰1–3）" }, { v: "B", t: "B（骰4–5）" }, { v: "C", t: "C（骰6）" }]);
+      slotSel.setAttribute("aria-label", "改哪個槽位"); slotSel.classList.add("inline-sel");
+      const opts = (e.skillLibrary || []).map(function (sk) { return { v: sk.id, t: (sk.name || sk.id) + (sk.drawable === false ? "（隱藏技）" : "") }; });
+      const skillSel = bindSelect(r, "setSkillId", opts.length ? opts : [{ v: "", t: "（還沒有技能）" }]);
+      skillSel.setAttribute("aria-label", "換成哪招"); skillSel.classList.add("inline-sel");
+      card.appendChild(sentence(
+        "…成立時，把槽位", slotSel, "換成", skillSel,
+        "（優先度", inlineNum(r, "priority", { deleteWhenEmpty: true, aria: "優先度" }), "，多條同時成立時數字大的蓋過小的）"
+      ));
       sec.body.appendChild(card);
     });
-    const add = el("button", { text: "＋ 形態轉換規則" });
+    const add = el("button", { text: "＋ 換招規則" });
     add.onclick = function () {
       if (!e.slotMapRules) e.slotMapRules = [];
       e.slotMapRules.push({
@@ -799,14 +947,14 @@
     return sec.root;
   }
 
-  // ---- 被動 ----
+  // ---- 被動能力 ----
   function renderPassivesSection(e) {
     const ps = e.passives || [];
-    const sec = detailsSec("passives", "被動", "（" + ps.length + "）", ps.length > 0);
+    const sec = detailsSec("passives", "被動能力", "（" + ps.length + "）", ps.length > 0);
     ps.forEach(function (p, pi) {
       sec.body.appendChild(renderPassiveCard(e, p, pi));
     });
-    const add = el("button", { text: "＋ 被動" });
+    const add = el("button", { text: "＋ 被動能力" });
     add.onclick = function () {
       if (!e.passives) e.passives = [];
       const taken = e.passives.map(function (x) { return x.id; });
@@ -837,29 +985,37 @@
     const g = el("div", { cls: "field-grid" });
     g.appendChild(fieldWrap("名稱", bindText(p, "name")));
     g.appendChild(fieldWrap("ID", bindText(p, "id")));
-    g.appendChild(fieldWrap("觸發時機", bindSelect(p, "trigger", TRIGGER_OPTS, { structural: true })));
     card.appendChild(g);
 
+    const trigSel = bindSelect(p, "trigger", TRIGGER_OPTS, { structural: true });
+    trigSel.setAttribute("aria-label", "觸發時機"); trigSel.classList.add("inline-sel");
+
     if (p.trigger !== "interceptOverride") {
-      const g2 = el("div", { cls: "field-grid" });
       // chance 以 % 呈現
       const chanceInput = el("input"); chanceInput.type = "number"; chanceInput.min = 0; chanceInput.max = 100;
+      chanceInput.classList.add("inline-num");
+      chanceInput.setAttribute("aria-label", "觸發機率百分比");
       chanceInput.value = p.chance !== undefined ? Math.round(p.chance * 100) : "";
-      chanceInput.placeholder = "100（必定）";
+      chanceInput.placeholder = "100";
       chanceInput.addEventListener("input", function () {
         if (chanceInput.value === "") delete p.chance;
         else p.chance = Math.max(0, Math.min(100, Number(chanceInput.value))) / 100;
         changed(false);
       });
-      g2.appendChild(fieldWrap("觸發機率 %（留空=必定）", chanceInput));
-      g2.appendChild(fieldWrap("目標", bindSelect(p, "target", TARGET_OPTS, { structural: true, def: "self" })));
+      const targetSel = bindSelect(p, "target", TARGET_OPTS, { structural: true, def: "self" });
+      targetSel.setAttribute("aria-label", "被動的目標"); targetSel.classList.add("inline-sel");
+
+      const parts = [trigSel, "，有", chanceInput, "% 的機率（留空＝必定），對", targetSel];
       if (p.target === "randomEnemyWithout") {
-        g2.appendChild(fieldWrap("排除已帶狀態", bindText(p, "targetState", { list: "dl-states" })));
+        parts.push("（還沒帶");
+        parts.push(stateSelect(p, "targetState", { aria: "排除已帶的狀態" }));
+        parts.push("的才算）");
       }
-      card.appendChild(g2);
-      card.appendChild(renderEffectList(e, p, "effects", "被動效果（turnEnd 施加的狀態自動豁免當回合層-1）"));
+      parts.push("做以下效果：");
+      card.appendChild(sentence.apply(null, parts));
+      card.appendChild(renderEffectList(e, p, "effects", "（回合結束時施加的狀態，會自動撐過當回合的層數-1）"));
     } else {
-      card.appendChild(el("div", { cls: "hint", text: "此被動使該 NPC 可攔截「攻擊玩家」的技能（§9 例外）。可加條件限制。" }));
+      card.appendChild(sentence(trigSel, "：讓這個角色可以攔截打向玩家的攻擊（規則書 §9 的例外）。"));
     }
 
     // 可選條件
@@ -871,54 +1027,55 @@
       else delete p.condition;
       changed(true);
     });
-    lab.appendChild(cc); lab.appendChild(el("span", { text: " 附加條件（成立才生效）" }));
+    lab.appendChild(cc); lab.appendChild(el("span", { text: " 只在特定條件下才生效（加上條件）" }));
     card.appendChild(lab);
     if (hasCond) card.appendChild(renderConditionBuilder(p, "condition", {}));
 
     return card;
   }
 
-  // ---- 初始狀態掛載 ----
+  // ---- 開場自帶狀態 ----
   function renderStatesSection(e) {
     const names = e.states ? Object.keys(e.states) : [];
-    const sec = detailsSec("states", "初始狀態掛載（§12B）", "（" + names.length + "）", names.length > 0);
-    sec.body.appendChild(el("div", { cls: "hint", text: "開戰時就掛在身上的狀態（層/級）；印記與瀑標記也可在此預掛。" }));
+    const sec = detailsSec("states", "開場自帶狀態", "（" + names.length + "）", names.length > 0);
+    sec.body.appendChild(el("div", { cls: "hint", text: "戰鬥一開始就掛在身上的狀態；印記與瀑標記也可以在這裡預掛。" }));
     names.forEach(function (name) {
       const st = e.states[name];
-      const row = el("div", { cls: "field-grid" });
-      const nameI = el("input"); nameI.type = "text"; nameI.value = name; nameI.setAttribute("list", "dl-states");
-      nameI.addEventListener("blur", function () {
-        const nv = nameI.value.trim();
-        if (!nv || nv === name) return;
-        e.states[nv] = e.states[name]; delete e.states[name];
-        changed(true);
+      // 改名走檢視模型 + onSet（下拉選別的名字＝改名）
+      const tmp = { n: name };
+      const nameSel = stateSelect(tmp, "n", {
+        aria: "狀態名", onSet: function () {
+          const nv = (tmp.n || "").trim();
+          if (!nv || nv === name) { changed(true); return; }
+          e.states[nv] = e.states[name]; delete e.states[name];
+          changed(true);
+        }
       });
-      row.appendChild(fieldWrap("狀態名", nameI));
-      row.appendChild(fieldWrap("層", bindNum(st, "layer", { min: 0, deleteWhenEmpty: true })));
-      row.appendChild(fieldWrap("級", bindNum(st, "level", { min: 0, deleteWhenEmpty: true })));
-      const rm = iconBtn("x", "移除狀態", function () {
+      const row = sentence(
+        "開場帶著", nameSel,
+        "，", inlineNum(st, "layer", { min: 0, deleteWhenEmpty: true, aria: "層數" }), "層、",
+        inlineNum(st, "level", { min: 0, deleteWhenEmpty: true, aria: "級數" }), "級"
+      );
+      row.appendChild(iconBtn("x", "移除這個開場狀態", function () {
         delete e.states[name];
         if (!Object.keys(e.states).length) delete e.states;
         changed(true);
-      }, "danger");
-      const w = el("div", { cls: "field" }); w.appendChild(el("label", { text: " " })); w.appendChild(rm);
-      row.appendChild(w);
+      }, "danger"));
       sec.body.appendChild(row);
     });
-    const addRow = el("div", { cls: "row" });
-    const newName = el("input"); newName.type = "text"; newName.placeholder = "狀態名"; newName.setAttribute("list", "dl-states");
-    const addB = el("button", { text: "＋ 掛載狀態" });
+    // 新增：下拉選好（或命名新印記）按加入
+    const tmpNew = { n: "" };
+    const addSel = stateSelect(tmpNew, "n", { aria: "要掛載的狀態", onSet: function () {} });
+    const addB = el("button", { text: "＋ 掛上這個狀態" });
     addB.onclick = function () {
-      const nv = newName.value.trim();
+      const nv = (tmpNew.n || "").trim();
       if (!nv) return;
       if (!e.states) e.states = {};
       if (!e.states[nv]) e.states[nv] = { layer: 1, level: 0 };
-      newName.value = "";
       openKeys["states"] = true;
       changed(true);
     };
-    addRow.appendChild(newName); addRow.appendChild(addB);
-    sec.body.appendChild(addRow);
+    sec.body.appendChild(sentence("讓這個角色開場帶著", addSel, addB));
     return sec.root;
   }
 
