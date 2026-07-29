@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拚點戰鬥系統 — 回歸測試</title>
+<style>
+  body { background:#0F172A; color:#E2E8F0; font-family:"Fira Sans","Microsoft JhengHei",system-ui,sans-serif;
+         margin:0; padding:24px; font-size:14px; line-height:1.6; }
+  h1 { font-size:18px; color:#fff; margin:0 0 4px; }
+  #summary { font-size:16px; font-weight:600; padding:10px 14px; border-radius:10px; margin:14px 0;
+             font-family:"Fira Code",Consolas,monospace; }
+  #summary.ok { background:rgba(16,185,129,.12); border:1px solid #10B981; color:#6EE7B7; }
+  #summary.bad { background:rgba(220,38,38,.12); border:1px solid #DC2626; color:#FCA5A5; }
+  .sec { margin-top:18px; font-weight:600; color:#22D3EE; border-bottom:1px solid rgba(255,255,255,.1); padding-bottom:3px; }
+  .ok { color:#6EE7B7; }
+  .bad { color:#FCA5A5; font-weight:600; }
+  .line { padding:1px 0 1px 12px; font-family:"Fira Code",Consolas,"Microsoft JhengHei",monospace; font-size:12.5px; }
+</style>
+</head>
+<body>
+<h1>拚點戰鬥系統 — 引擎回歸測試</h1>
+<p style="color:#94A3B8; margin:2px 0 0;">驗算來源：<code>trpg-clash-rules</code> skill（clash.md / damage.md）</p>
+<div id="summary">執行中…</div>
+<div id="out"></div>
+
+<script src="../engine/states.js"></script>
+<script src="../engine/clash.js"></script>
+<script src="../engine/damage.js"></script>
+<script src="../engine/turn.js"></script>
+<script src="tests.js"></script>
+<script>
+(function () {
+  var res;
+  try { res = window.runTests(); }
+  catch (err) {
+    document.getElementById("summary").className = "bad";
+    document.getElementById("summary").textContent = "測試執行崩潰：" + err.message;
+    console.error(err);
+    window.__testResult = { pass: 0, fail: -1, crash: String(err && err.stack || err) };
+    return;
+  }
+  var sum = document.getElementById("summary");
+  sum.className = res.fail === 0 ? "ok" : "bad";
+  sum.textContent = res.fail === 0
+    ? "全部通過 ✓　（" + res.pass + " 項）"
+    : "通過 " + res.pass + " 項、失敗 " + res.fail + " 項";
+  var out = document.getElementById("out");
+  res.lines.forEach(function (l) {
+    var d = document.createElement("div");
+    if (l.section) { d.className = "sec"; d.textContent = l.text; }
+    else { d.className = "line " + (l.ok ? "ok" : "bad"); d.textContent = l.text; }
+    out.appendChild(d);
+  });
+  window.__testResult = { pass: res.pass, fail: res.fail, failures: res.failures };
+  console.log("測試結果：通過 " + res.pass + "、失敗 " + res.fail);
+  if (res.fail) console.log("失敗清單：" + res.failures.join(" | "));
+})();
+</script>
+</body>
+</html>
