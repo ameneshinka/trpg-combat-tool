@@ -3,129 +3,100 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>拚點戰鬥系統 — 戰鬥引擎</title>
+<title>拚點戰鬥系統 — 戰鬥追蹤工具</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
-  <h1>拚點戰鬥系統 — 戰鬥引擎</h1>
+  <h1>拚點戰鬥系統 — 戰鬥追蹤</h1>
   <div class="header-right">
     <span id="connState" class="conn-state">單機</span>
-    <span id="turnRoundIndicator">戰鬥輪 — / 回合 —</span>
+    <span id="turnIndicator">戰鬥輪 — ／ 回合 —</span>
   </div>
 </header>
 
 <main>
-  <!-- ============ SETUP SCREEN ============ -->
+  <!-- ============ 設定畫面 ============ -->
   <section id="setupScreen">
-    <div id="reconnectBanner" class="reconnect-banner hidden">
-      <span id="reconnectText"></span>
-      <button id="btnReconnect" class="primary">重連</button>
-      <button id="btnDiscardSession">放棄</button>
-    </div>
     <h2>連線模式</h2>
     <div class="row" id="modeRow">
-      <label><input type="radio" name="mode" value="solo" checked> 單機</label>
+      <label><input type="radio" name="mode" value="solo" checked> 單機（KP 一人操作）</label>
       <label><input type="radio" name="mode" value="kp"> 建立房間（KP）</label>
       <label><input type="radio" name="mode" value="player"> 加入房間（玩家）</label>
     </div>
-    <p class="hint" id="syncUnavailable" style="display:none; color:var(--warn);">
-      未偵測到有效的 Firebase 設定（js/firebase-config.js 的 databaseURL 為空）。連線模式停用，僅單機可用。
+    <p class="hint hidden" id="syncWarn" style="color:var(--warn);">
+      未偵測到 Firebase 設定（js/firebase-config.js 的 databaseURL 為空）→ 連線模式停用，單機照常可用。
     </p>
-    <p class="hint" style="color:var(--warn);">⚠ 原型模式：房間規則寬鬆，任何知道房號者皆可讀寫，請勿放真實隱私資料。</p>
 
-    <div id="kpRoomRow" class="row hidden">
-      <span>房號：</span><span id="kpRoomCode" class="roomcode">————</span>
-      <button id="btnGenRoom">產生房號</button>
+    <div id="kpRow" class="row hidden">
+      <span>房號：</span><span id="roomCode" class="roomcode">————</span>
+      <button type="button" id="genRoomBtn">產生房號</button>
+      <span class="hint">把房號告訴玩家；正式狀態只有 KP 能寫（KP 端權威）。</span>
     </div>
 
-    <div id="playerJoinRow" class="hidden">
+    <div id="joinRow" class="hidden">
       <div class="row">
-        <input type="text" id="joinRoomCode" placeholder="房號（4 碼）" maxlength="6" style="width:120px; text-transform:uppercase;">
-        <input type="text" id="playerName" placeholder="你的暱稱" style="width:120px;">
-        <button id="btnJoinRoom" class="primary">加入房間</button>
+        <input type="text" id="joinCode" placeholder="房號" maxlength="8" style="width:110px; text-transform:uppercase;" aria-label="房號">
+        <input type="text" id="joinName" placeholder="你的暱稱" style="width:130px;" aria-label="暱稱">
+        <button type="button" id="joinBtn" class="primary">加入房間</button>
       </div>
       <div id="joinStatus" class="hint"></div>
     </div>
 
-    <div id="battleSetupBlock">
-    <h2>戰鬥前設定 — 參戰名單</h2>
-    <div class="row">
-      <button id="btnLoadSample">載入範例名單</button>
-      <button id="btnLoadGuide">載入進階範例（建資料指南）</button>
-      <button id="btnClearRoster" class="danger">清空名單</button>
+    <div id="soloRow">
+      <h2>參戰名單</h2>
+      <p class="hint">
+        角色寫死在 <code>data/characters.js</code>（依 trpg-combat-webapp skill：不做資料輸入介面）。
+        調平衡只改該檔的數值與 <code>tuning</code>，被動邏輯在 <code>engine/passives.js</code>。
+      </p>
+      <div id="rosterPreview" class="roster-preview"></div>
+      <p class="hint" id="pcPending" style="color:var(--warn);"></p>
+      <p class="hint">
+        規則以三個 skill 為準：<code>trpg-clash-rules</code>（規則）、
+        <code>trpg-combat-webapp</code>（實作）、<code>trpg-character-design</code>（角色設計）。
+        引擎回歸測試：<a href="tests/" target="_blank" rel="noopener">開啟測試頁</a>
+      </p>
     </div>
-
-    <!-- ============ 三欄編輯器 ============ -->
-    <div class="editor-layout">
-      <div class="pane" id="rosterPane">
-        <p class="pane-title">參戰角色</p>
-        <div id="rosterList"></div>
-        <button id="btnAddEntity" class="primary" style="width:100%; margin-top:8px;">＋ 新增角色</button>
-      </div>
-
-      <div class="pane" id="editorPane">
-        <p class="pane-title">角色編輯</p>
-        <div id="entityEditor"><p class="preview-empty">左側選擇或新增一個角色開始編輯</p></div>
-      </div>
-
-      <div class="pane" id="previewPane">
-        <p class="pane-title">即時預覽</p>
-        <div id="entityPreview"><p class="preview-empty">（尚未選擇角色）</p></div>
-        <div id="editorValidation" aria-live="polite"></div>
-      </div>
-    </div>
-
-    <!-- ============ 進階 JSON 模式 ============ -->
-    <details class="json-drawer" id="jsonDrawer">
-      <summary>進階 JSON 模式（完整名單，可貼上/匯出）</summary>
-      <textarea id="rosterJson" spellcheck="false" aria-label="名單 JSON"></textarea>
-      <div class="row">
-        <button id="btnApplyJson" class="primary">套用 JSON → 表單</button>
-        <button id="btnValidateRoster">驗證 JSON</button>
-      </div>
-      <div id="rosterError" class="error" role="alert"></div>
-    </details>
-
-    <h3>PC 槽位成長順序（§4.1）</h3>
-    <p class="hint">依此順序輪流每回合 +1 槽位（用 ▲▼ 調整）。清單由名單中的 PC 自動生成。</p>
-    <div id="pcOrderList" class="order-list"></div>
 
     <div class="row" style="margin-top:16px;">
-      <button id="btnStartBattle" class="primary" style="min-width:200px;">開始戰鬥</button>
-      <span id="startBattleError" class="error" role="alert"></span>
+      <button type="button" id="startBtn" class="primary" style="min-width:220px;">開始戰鬥（單機）</button>
     </div>
-    </div><!-- /battleSetupBlock -->
   </section>
 
-  <!-- ============ BATTLE SCREEN ============ -->
+  <!-- ============ 戰鬥畫面 ============ -->
   <section id="battleScreen" class="hidden">
     <div class="row">
-      <button id="btnBackToSetup">← 回設定</button>
-      <div id="phaseIndicator" class="phase-indicator">階段一：回合開始</div>
+      <button type="button" id="backBtn">← 回設定</button>
+      <div id="phaseTitle" class="phase-indicator">階段一・回合開始</div>
     </div>
 
-    <div id="entityPanels" class="entity-panels"></div>
+    <div id="turnOrder" class="turn-order"></div>
+    <div id="playerRoster" class="row"></div>
+    <div id="panels" class="entity-panels"></div>
+    <div id="actionArea" class="phase-action"></div>
 
-    <div id="phaseAction" class="phase-action"></div>
-
-    <h3>戰鬥紀錄</h3>
-    <div id="battleLog" class="battle-log"></div>
+    <h3>事件紀錄</h3>
+    <div id="eventLog" class="battle-log" aria-live="polite"></div>
   </section>
 </main>
 
-<!-- Firebase SDK 採「用到才載入」（見 sync.js 的 loadSdk）；離線或未填 config 時單機照常可用 -->
-<script src="js/firebase-config.js?v=2"></script>
-<script src="js/sync.js?v=2"></script>
+<!-- Firebase SDK 用到才動態載入（見 js/sync.js）；離線或未設定時單機照常可用 -->
+<script src="js/firebase-config.js"></script>
+<script src="js/sync.js"></script>
 
-<script src="js/data.js?v=2"></script>
-<script src="js/engine/slotmap.js?v=2"></script>
-<script src="js/engine/clash.js?v=2"></script>
-<script src="js/engine/damage.js?v=2"></script>
-<script src="js/engine/triggers.js?v=2"></script>
-<script src="js/engine/turncycle.js?v=2"></script>
-<script src="js/ui.js?v=2"></script>
-<script src="js/editor.js?v=1"></script>
-<script src="js/app.js?v=2"></script>
+<!-- 引擎（純計算，無 DOM 依賴）-->
+<script src="engine/states.js"></script>
+<script src="engine/clash.js"></script>
+<script src="engine/damage.js"></script>
+<script src="engine/passives.js"></script>
+<script src="engine/turn.js"></script>
+
+<!-- 角色資料（唯一的改平衡處）-->
+<script src="data/characters.js"></script>
+
+<!-- UI -->
+<script src="ui/panels.js"></script>
+<script src="ui/battle.js"></script>
+<script src="ui/app.js"></script>
 </body>
 </html>

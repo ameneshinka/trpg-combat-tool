@@ -309,6 +309,288 @@
   }
   Turn.runTurnStartPhase = runTurnStartPhase;
 
+  // ---------------- 階段二：宣告與配對 ----------------
+  /**
+   * 依宣告建立配對草案。
+   * 攔截：把攻擊的目標轉移到攔截者身上（資格：有效 DEX 嚴格大於原目標）。
+   * 配對結果三種：clash（雙方拚點）／unilateral（單方面攻擊）／defenseOnly（防禦技無對手）
+   */
+  function buildPairing(battle, events) {
+    const byId = {};
+    battle.entities.forEach(function (e) { byId[e.id] = e; });
+
+    const attacks = [], defenses = [], intercepts = [];
+    battle.entities.forEach(function (e) {
+      if (!e.canAct) return;
+      (e.declarations || []).forEach(function (d) {
+        const rec = { entity: e, decl: d };
+        if (d.action === "attack") attacks.push(rec);
+        else if (d.action === "intercept") intercepts.push(rec);
+        else defenses.push(rec); // guard / dodge / defend
+      });
+    });
+
+    // 攔截判定
+    attacks.forEach(function (atk) {
+      const origTarget = byId[atk.decl.targetId];
+      if (!origTarget) return;
+      const candidates = intercepts.filter(function (ic) {
+        if (ic.consumed) return false;
+        if (ic.decl.protectId !== atk.decl.targetId) return false;
+        if (!mayInterceptPlayerSide(ic.entity)) {
+          events.push("攔截被拒：" + ic.entity.name + " 非玩家方，依規則不能攔截打向玩家的攻擊（且無攔截例外被動）");
+          return false;
+        }
+        if (!canIntercept(ic.entity, origTarget)) {
+          events.push("攔截被拒：" + ic.entity.name + " 的有效 DEX 未「嚴格大於」" + origTarget.name);
+          return false;
+        }
+        return true;
+      });
+      if (candidates.length) {
+        // 多人搶攔：DEX 最高者優先（實務上由玩家協調、KP 確認）
+        candidates.sort(function (a, b) { return S.effectiveDex(b.entity) - S.effectiveDex(a.entity); });
+        const win = candidates[0];
+        win.consumed = true;
+        atk.redirectTo = win.entity.id;
+        atk.pairedWith = win;
+        events.push("攔截成立：" + win.entity.name + "（DEX " + S.effectiveDex(win.entity).toFixed(1) +
+          "）把 " + atk.entity.name + " 對 " + origTarget.name + "（DEX " +
+          S.effectiveDex(origTarget).toFixed(1) + "）的攻擊搶到自己身上");
+      }
+    });
+
+    const entries = [];
+    const usedDecl = {};
+    function declKey(rec) { return rec.entity.id + "#" + rec.decl.slotIndex; }
+
+    attacks.forEach(function (atk) {
+      if (usedDecl[declKey(atk)]) return;
+      const finalTargetId = atk.redirectTo || atk.decl.targetId;
+      const target = byId[finalTargetId];
+      if (!target) return;
+
+      // 對手可用的應對：攔截者本身的技能 → 目標的防禦技 → 目標對我的攻擊（互拚）
+      let opponent = null;
+      if (atk.pairedWith) {
+        opponent = atk.pairedWith;
+      } else {
+        opponent = defenses.find(function (d) {
+          return !usedDecl[declKey(d)] && d.entity.id === finalTargetId &&
+            (!d.decl.targetId || d.decl.targetId === atk.entity.id);
+        }) || attacks.find(function (a2) {
+          return a2 !== atk && !usedDecl[declKey(a2)] && a2.entity.id === finalTargetId &&
+            (a2.redirectTo || a2.decl.targetId) === atk.entity.id;
+        }) || null;
+      }
+
+      usedDecl[declKey(atk)] = true;
+      if (opponent) {
+        usedDecl[declKey(opponent)] = true;
+        entries.push({
+          kind: "clash",
+          aEntityId: atk.entity.id, aSkillId: atk.decl.skillId, aSlot: atk.decl.slotIndex,
+          bEntityId: opponent.entity.id, bSkillId: opponent.decl.skillId, bSlot: opponent.decl.slotIndex,
+          targetId: finalTargetId
+        });
+      } else {
+        entries.push({
+          kind: "unilateral",
+          aEntityId: atk.entity.id, aSkillId: atk.decl.skillId, aSlot: atk.decl.slotIndex,
+          targetId: finalTargetId
+        });
+      }
+    });
+
+    // 沒被配對到的防禦技：單獨結算（防守照樣給臨時生命值）
+    defenses.concat(intercepts).forEach(function (d) {
+      if (usedDecl[declKey(d)] || d.consumed) return;
+      entries.push({
+        kind: "defenseOnly",
+        aEntityId: d.entity.id, aSkillId: d.decl.skillId, aSlot: d.decl.slotIndex
+      });
+    });
+
+    return entries;
+  }
+  Turn.buildPairing = buildPairing;
+
+  // ---------------- 階段三～五：依 DEX 序列結算 ----------------
+  function* resolveEntry(battle, entry, events) {
+    const byId = {};
+    battle.entities.forEach(function (e) { byId[e.id] = e; });
+    const a = byId[entry.aEntityId];
+    if (!a || a.hp <= 0) return;
+    if (a.cantActRestOfTurn) {
+      events.push(a.name + " 本回合剩餘行動已作廢（混亂），跳過");
+      return;
+    }
+    const skillA = findSkill(a, entry.aSkillId);
+    if (!skillA) { events.push("找不到技能 " + entry.aSkillId); return; }
+
+    // --- 只有防禦技，沒有對手 ---
+    if (entry.kind === "defenseOnly") {
+      const rtA = acquireCoinRuntime(a, skillA);
+      const baseA = S.effectiveBasePower(a, skillA);
+      if (skillA.isGuard) {
+        const r = yield* D.resolveGuard(a, skillA, rtA, baseA, {});
+        r.events.forEach(function (m) { events.push(m); });
+      } else {
+        events.push(a.name + " 使用《" + skillA.name + "》但無人攻擊，無事發生");
+      }
+      return;
+    }
+
+    // --- 單方面攻擊 ---
+    if (entry.kind === "unilateral") {
+      const target = byId[entry.targetId];
+      if (!target || target.hp <= 0) { events.push("單方面攻擊的目標已倒下，跳過"); return; }
+      if (skillA.type !== "attack") { events.push(a.name + " 的防禦型技能無對手，無事發生"); return; }
+      events.push("── " + a.name + "《" + skillA.name + "》單方面攻擊 " + target.name + "（無人抵擋）");
+      const rtA = acquireCoinRuntime(a, skillA);
+      const baseA = S.effectiveBasePower(a, skillA);
+      if (skillA.onUse) skillA.onUse({ self: a, target: target, events: events, S: S });
+      const res = yield* D.resolveDamage(a, target, rtA, baseA, skillA.coinPower, skillA.name, {});
+      res.events.forEach(function (m) { events.push(m); });
+      if (skillA.onHit && target.hp >= 0) skillA.onHit({ self: a, target: target, events: events, S: S });
+      return;
+    }
+
+    // --- 拚點 ---
+    const b = byId[entry.bEntityId];
+    if (!b || b.hp <= 0) { events.push("拚點對手已倒下，跳過"); return; }
+    if (b.cantActRestOfTurn) {
+      events.push(b.name + " 行動已作廢（混亂）→ 改為 " + a.name + " 單方面攻擊");
+      yield* resolveEntry(battle, {
+        kind: "unilateral", aEntityId: a.id, aSkillId: entry.aSkillId, targetId: b.id
+      }, events);
+      return;
+    }
+    const skillB = findSkill(b, entry.bSkillId);
+    if (!skillB) { events.push("找不到技能 " + entry.bSkillId); return; }
+
+    const rtA = acquireCoinRuntime(a, skillA);
+    const rtB = acquireCoinRuntime(b, skillB);
+    const baseA = S.effectiveBasePower(a, skillA);
+    const baseB = S.effectiveBasePower(b, skillB);
+
+    events.push("── 拚點：" + a.name + "《" + skillA.name + "》 vs " + b.name + "《" + skillB.name + "》");
+    if (skillA.onUse) skillA.onUse({ self: a, target: b, events: events, S: S });
+    if (skillB.onUse) skillB.onUse({ self: b, target: a, events: events, S: S });
+
+    // 【防守】不論拚點輸贏都給臨時生命值（它的作用就是吸收這次傷害）
+    // ⚠ 規則未明訂「防守是否需拚贏才生效」—— 採此裁決，見 README 的未定義裁決清單
+    for (const side of [{ e: a, sk: skillA, rt: rtA, base: baseA }, { e: b, sk: skillB, rt: rtB, base: baseB }]) {
+      if (side.sk.isGuard) {
+        const r = yield* D.resolveGuard(side.e, side.sk, side.rt, side.base, {});
+        r.events.forEach(function (m) { events.push(m); });
+      }
+    }
+
+    const result = global.Clash.resolveClash(
+      { entity: a, skill: skillA, coinRuntime: rtA, basePower: baseA },
+      { entity: b, skill: skillB, coinRuntime: rtB, basePower: baseB },
+      {}
+    );
+    result.events.forEach(function (m) { events.push(m); });
+
+    if (!result.winner) { events.push("無效拚點（雙方開局皆無完好硬幣）"); return; }
+
+    const winIsA = result.winner === "A";
+    const winner = winIsA ? a : b, loser = winIsA ? b : a;
+    const winSkill = winIsA ? skillA : skillB, loseSkill = winIsA ? skillB : skillA;
+    const winRt = winIsA ? rtA : rtB, loseRt = winIsA ? rtB : rtA;
+    const winBase = winIsA ? baseA : baseB;
+
+    // 通過方結算傷害（防禦型通過 → 無傷害）
+    if (winSkill.type === "attack") {
+      const res = yield* D.resolveDamage(winner, loser, winRt, winBase, winSkill.coinPower, winSkill.name, {});
+      res.events.forEach(function (m) { events.push(m); });
+      if (winSkill.onHit && loser.hp >= 0) winSkill.onHit({ self: winner, target: loser, events: events, S: S });
+    } else {
+      events.push(winner.name + " 的防禦型技能《" + winSkill.name + "》通過拚點" +
+        (winSkill.isDodge ? "（成功閃躲，攻擊無法命中；硬幣未損失 → 本回合還能繼續擋）" : "（防禦成功）"));
+      if (winSkill.onHit) winSkill.onHit({ self: winner, target: loser, events: events, S: S });
+    }
+
+    // 碎幣追加攻擊：只有拚輸方觸發
+    if (global.Clash.shatteredCoins(loseRt).length) {
+      events.push("── " + loser.name + " 拚輸且有碎掉的紅幣 → 碎幣追加攻擊（基威視同 1、每枚幣威視同 +1）");
+      const fu = yield* D.resolveShatteredFollowUp(loser, winner, loseRt, {});
+      fu.events.forEach(function (m) { events.push(m); });
+    }
+    if (loseSkill.isDodge) {
+      events.push("⚠ " + loser.name + " 閃躲失敗，硬幣損失持續到回合結束 → 本回合剩下的攻擊都會命中");
+    }
+  }
+
+  // ---------------- 完整一回合（六階段） ----------------
+  function* runTurn(battle, events) {
+    events.push("═══ 回合 " + battle.turnNumber + " ═══");
+
+    // 階段一
+    events.push("【階段一】回合開始");
+    if (global.Passives && global.Passives.resetPerTurnCounters) {
+      global.Passives.resetPerTurnCounters(battle.entities);
+    }
+    yield* runTurnStartPhase(battle, events);
+
+    // 階段二
+    events.push("【階段二】宣告與配對");
+    for (const e of battle.turnOrder) {
+      if (!e.canAct || !e.drawnSkills.length) continue;
+      for (const drawn of e.drawnSkills) {
+        const sk = findSkill(e, drawn.skillId);
+        const decl = yield {
+          type: "declare", entityId: e.id, name: e.name,
+          slotIndex: drawn.slotIndex, skillId: drawn.skillId,
+          skillName: sk ? sk.name : drawn.skillId,
+          skillType: sk ? sk.type : "attack",
+          isDodge: !!(sk && sk.isDodge), isGuard: !!(sk && sk.isGuard)
+        };
+        e.declarations.push({
+          slotIndex: drawn.slotIndex, skillId: drawn.skillId,
+          action: decl.action, targetId: decl.targetId, protectId: decl.protectId
+        });
+      }
+      // 防禦技不受抽選限制：KP／玩家可額外宣告（各佔一槽，同回合可多次）
+    }
+    const proposed = buildPairing(battle, events);
+    const confirmed = yield { type: "confirmPairing", proposed: proposed };
+    const finalEntries = confirmed && confirmed.entries ? confirmed.entries : proposed;
+
+    // 階段三～五：依有效 DEX 序列結算
+    events.push("【階段三～五】依有效 DEX 序列結算拚點、傷害與狀態觸發");
+    for (const actor of battle.turnOrder) {
+      const mine = finalEntries.filter(function (en) { return en.aEntityId === actor.id; });
+      for (const entry of mine) {
+        if (entry._resolved) continue;
+        entry._resolved = true;
+        yield* resolveEntry(battle, entry, events);
+      }
+    }
+    // 保險：任何未被 turnOrder 涵蓋的殘留配對（例如已倒下者的宣告）
+    for (const entry of finalEntries) {
+      if (entry._resolved) continue;
+      entry._resolved = true;
+      yield* resolveEntry(battle, entry, events);
+    }
+
+    // 階段六
+    events.push("【階段六】回合結束");
+    runTurnEndPhase(battle.entities, events, {
+      runTurnEndPassives: function (alive, ev) {
+        if (global.Passives && global.Passives.runTurnEnd) {
+          global.Passives.runTurnEnd(alive, battle, ev);
+        }
+      }
+    });
+
+    battle.turnNumber += 1;
+    return battle;
+  }
+  Turn.runTurn = runTurn;
+
   // ---------------- 戰鬥輪開始 ----------------
   function startBattleRound(battle, events) {
     battle.roundNumber = (battle.roundNumber || 0) + 1;

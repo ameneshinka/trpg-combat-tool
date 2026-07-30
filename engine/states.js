@@ -231,15 +231,23 @@
     amount = Math.max(0, Math.floor(amount || 0));
     if (amount <= 0) return 0;
     const hpBefore = entity.hp;
+    const tempBefore = entity.tempHp || 0;
     let remain = amount;
+    let fromTemp = 0;
     if (entity.tempHp > 0) {
-      const fromTemp = Math.min(entity.tempHp, remain);
+      fromTemp = Math.min(entity.tempHp, remain);
       entity.tempHp -= fromTemp;
       remain -= fromTemp;
     }
     entity.hp = Math.max(0, entity.hp - remain);
-    if (events) events.push((label || "傷害") + "：" + entity.name + " −" + amount +
-      "（HP " + hpBefore + " → " + entity.hp + (entity.tempHp > 0 ? "，臨時HP 剩 " + entity.tempHp : "") + "）");
+    if (events) {
+      // 明確標出「臨時生命值吸收了多少、真實血量掉了多少」，否則桌邊會看不懂
+      const split = fromTemp > 0
+        ? "（臨時HP 吸收 " + fromTemp + "：" + tempBefore + " → " + entity.tempHp +
+          "；真實血量 −" + remain + "：" + hpBefore + " → " + entity.hp + "）"
+        : "（HP " + hpBefore + " → " + entity.hp + "）";
+      events.push((label || "傷害") + "：" + entity.name + " 共 −" + amount + " " + split);
+    }
     if (crossedConfusion(entity, hpBefore, entity.hp)) enterConfusion(entity, events);
     return amount;
   }

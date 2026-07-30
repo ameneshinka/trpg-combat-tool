@@ -75,14 +75,13 @@
   }
   Sync.init = ensureReady; // 對外沿用 init 名稱（現為非同步）
 
+  // ⚠ 依 trpg-combat-webapp skill：不使用 localStorage／sessionStorage。
+  // clientId 只存在記憶體 → 重整會拿到新 id（玩家需重選角色；KP 的戰鬥狀態
+  // 從 Firebase /state 還原，不依賴本機儲存）。
+  let _clientId = null;
   function clientId() {
-    let id = null;
-    try { id = localStorage.getItem("trpg_client_id"); } catch (e) {}
-    if (!id) {
-      id = "c_" + Math.random().toString(36).slice(2, 10);
-      try { localStorage.setItem("trpg_client_id", id); } catch (e) {}
-    }
-    return id;
+    if (!_clientId) _clientId = "c_" + Math.random().toString(36).slice(2, 10);
+    return _clientId;
   }
   Sync.clientId = clientId;
 
