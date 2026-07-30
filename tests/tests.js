@@ -433,7 +433,8 @@
       eq(opts.map(function (o) { return o.id; }), ["a1", "guard", "dodge"],
         "改技能的選項 = 骰出的菜單 ＋ 全部防禦技");
       eq(opts.length > 1, true, "即使當初被迫單選，仍有東西可改（可改成防禦技）");
-      eq(/防禦技/.test(opts[1].name), true, "防禦技選項有標註不受抽選限制");
+      eq(opts.map(function (o) { return o.kind; }), ["attack", "defense", "defense"],
+        "每個選項標了 kind，UI 才能把攻擊技與防禦技分組顯示");
 
       // 槽位帳：3 槽、已用 1 → 還能新增 2 個行動
       e.drawnSkills = [forced];
@@ -508,6 +509,48 @@
       eq(T.dieToSlot(6), "C", "骰面 6 → 槽位 C");
       eq(T.buildSkillMenu(e, 1, 4).skillIds, ["skA", "skB"], "骰到不同槽位 → 兩個選項");
       eq(T.buildSkillMenu(e, 1, 2).skillIds, ["skA"], "兩次同槽位 → 只有一個選項（被迫單選）");
+    }
+
+    section("抽技能當下就能選防禦技（防守／閃躲不受抽選限制）");
+    {
+      const e = mkEntity({});
+      const a1 = mkSkill({ id: "a1", name: "招一" });
+      const a2 = mkSkill({ id: "a2", name: "招二" });
+      const a3 = mkSkill({ id: "a3", name: "招三" });
+      const guard = mkSkill({ id: "guard", name: "防守", type: "defense", isGuard: true, coins: ["normal"] });
+      const dodge = mkSkill({ id: "dodge", name: "閃躲", type: "defense", isDodge: true, coins: ["normal"] });
+      e.skillLibrary = [a1, a2, a3, guard, dodge];
+      e.slotMap = { A: "a1", B: "a2", C: "a3" };
+
+      // 骰到兩個不同槽位 → 2 攻擊 + 2 防禦
+      const m1 = T.buildDrawMenu(e, 1, 4);
+      eq(m1.options.map(function (o) { return o.id; }), ["a1", "a2", "guard", "dodge"],
+        "骰 1／4 → 招一、招二 ＋ 防守、閃躲");
+      eq(m1.attackCount, 2, "攻擊選項 2 個");
+      eq(m1.forcedSingleAttack, false, "不是被迫單選");
+      eq(m1.options.map(function (o) { return o.kind; }), ["attack", "attack", "defense", "defense"],
+        "每個選項都標了 kind 供 UI 分組");
+
+      // 骰到同一槽位（原本的「被迫單選」）→ 攻擊只有 1 個，但仍有防禦技可選
+      const m2 = T.buildDrawMenu(e, 1, 2);
+      eq(m2.attackCount, 1, "骰 1／2 指向同一槽位 → 攻擊選項只有 1 個");
+      eq(m2.forcedSingleAttack, true, "標記為攻擊被迫單選");
+      eq(m2.options.length, 3, "但總選項有 3 個（招一 ＋ 防守 ＋ 閃躲）→ 玩家仍有選擇");
+      eq(m2.options.map(function (o) { return o.id; }), ["a1", "guard", "dodge"], "選項內容正確");
+
+      // 骰到空的 slotMap 槽位 → 仍可用防禦技（不再是死掉的空槽）
+      const e2 = mkEntity({});
+      e2.skillLibrary = [guard, dodge];
+      e2.slotMap = { A: null, B: null, C: null };
+      const m3 = T.buildDrawMenu(e2, 1, 4);
+      eq(m3.attackCount, 0, "沒有攻擊技可抽");
+      eq(m3.options.map(function (o) { return o.id; }), ["guard", "dodge"], "仍可選防禦技");
+
+      // 完全沒技能 → 才是真的空槽
+      const e3 = mkEntity({});
+      e3.skillLibrary = [];
+      e3.slotMap = { A: null, B: null, C: null };
+      eq(T.buildDrawMenu(e3, 1, 4).options.length, 0, "毫無技能 → 空槽");
     }
 
     section("【閃躲】硬幣損失持續到回合結束（作用域唯一例外）");

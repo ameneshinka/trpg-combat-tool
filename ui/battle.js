@@ -183,16 +183,34 @@
       } else if (req.isRedo) {
         box.appendChild(el("p", { cls: "hint", text: "可選：當初 1d6 骰出的菜單" + ((req.dice || []).length ? "（" + req.dice.join(" 與 ") + "）" : "") + "，加上不受抽選限制的防禦技。" }));
       } else {
-        box.appendChild(el("p", { cls: "hint", text: "1d6 骰出 " + req.dice.join(" 與 ") + "，指向以下技能：" }));
+        box.appendChild(el("p", {
+          cls: "hint",
+          text: "1d6 骰出 " + (req.dice || []).join(" 與 ") +
+            (req.forcedSingleAttack ? "（兩次指向同一個槽位 → 攻擊選項只有一個，但仍可改用防禦技）" : "")
+        }));
       }
-      const r = el("div", { cls: "row" });
-      req.options.forEach(function (o) {
-        const b = el("button", { text: o.name });
-        b.type = "button";
-        b.onclick = function () { submit(o.id); };
-        r.appendChild(b);
-      });
-      box.appendChild(r);
+      // 攻擊技與防禦技分組顯示：防禦技不受骰選限制，任何時候都能挑
+      const atk = req.options.filter(function (o) { return (o.kind || "attack") === "attack"; });
+      const def = req.options.filter(function (o) { return o.kind === "defense"; });
+      function optionRow(list, cls) {
+        const r = el("div", { cls: "row" });
+        list.forEach(function (o) {
+          const b = el("button", { cls: cls, text: o.name });
+          b.type = "button";
+          b.onclick = function () { submit(o.id); };
+          r.appendChild(b);
+        });
+        return r;
+      }
+      if (atk.length) {
+        box.appendChild(el("div", { cls: "sub-label", text: "骰出的攻擊技" }));
+        box.appendChild(optionRow(atk, "primary"));
+      }
+      if (def.length) {
+        box.appendChild(el("div", { cls: "sub-label", text: "防禦技（不受抽選限制，想用就能用・各佔一槽）" }));
+        box.appendChild(optionRow(def, ""));
+        box.appendChild(el("p", { cls: "hint", text: "【防守】臨時生命值 = 最終威力 × 5　│　【閃躲】躲掉攻擊，但拚輸後本回合再也擋不住" }));
+      }
       return;
     }
 

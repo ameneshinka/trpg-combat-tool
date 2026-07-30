@@ -123,6 +123,36 @@
   }
   Turn.defenseSkills = defenseSkills;
 
+  /**
+   * 一個槽位的完整可選清單（抽技能當下就用這個）。
+   * ＝ 1d6 骰出的攻擊技（經 slotMap，最多 2 個相異）
+   *   ＋ 全部防禦技（【防守】【閃躲】不受抽選限制，想用就能用）
+   *
+   * ⚠ 「被迫單選」只是指「骰出的攻擊選項只有一個」，
+   *    不代表沒得選 —— 玩家永遠可以改用防禦技。
+   */
+  function buildDrawMenu(entity, die1, die2) {
+    const menu = buildSkillMenu(entity, die1, die2);
+    const options = [];
+    menu.skillIds.forEach(function (id) {
+      const sk = findSkill(entity, id);
+      options.push({ id: id, name: sk ? sk.name : id, kind: "attack" });
+    });
+    const attackCount = options.length;
+    defenseSkills(entity).forEach(function (sk) {
+      if (!options.some(function (o) { return o.id === sk.id; })) {
+        options.push({ id: sk.id, name: sk.name, kind: "defense" });
+      }
+    });
+    return {
+      slots: menu.slots,
+      options: options,
+      attackCount: attackCount,
+      forcedSingleAttack: attackCount === 1
+    };
+  }
+  Turn.buildDrawMenu = buildDrawMenu;
+
   // ---------------- 硬幣執行期狀態的作用域 ----------------
   /**
    * 取得某技能本次使用的 coinRuntime。
@@ -266,32 +296,35 @@
       if (!e.canAct || !e.slots) continue;
       for (let i = 0; i < e.slots; i++) {
         const dice = yield { type: "skillDraw1d6", entityId: e.id, name: e.name, slotIndex: i };
-        const menu = buildSkillMenu(e, dice.die1, dice.die2);
-        const names = menu.skillIds.map(function (id) {
-          const sk = findSkill(e, id); return { id: id, name: sk ? sk.name : id };
-        });
+        // 菜單＝骰出的攻擊技 ＋ 防禦技（防守／閃躲不受抽選限制，抽選當下就能選）
+        const menu = buildDrawMenu(e, dice.die1, dice.die2);
+        const diceText = "1d6 = " + dice.die1 + "／" + dice.die2;
         let chosen;
-        if (!names.length) {
-          events.push(e.name + " 第 " + (i + 1) + " 槽：骰到的槽位無技能指向，視為空槽");
+        if (!menu.options.length) {
+          events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
+            " 骰到的槽位無技能指向，且無防禦技可用 → 視為空槽");
           continue;
         }
-        if (names.length === 1) {
-          chosen = names[0].id;
-          events.push(e.name + " 第 " + (i + 1) + " 槽：1d6 = " + dice.die1 + "／" + dice.die2 +
-            "（兩次同槽位，被迫單選）→ " + names[0].name);
+        if (menu.options.length === 1) {
+          chosen = menu.options[0].id;
+          events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
+            "（唯一選項）→ " + menu.options[0].name);
         } else {
           chosen = yield {
             type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: i,
-            options: names, dice: [dice.die1, dice.die2]
+            options: menu.options, dice: [dice.die1, dice.die2],
+            attackCount: menu.attackCount, forcedSingleAttack: menu.forcedSingleAttack
           };
-          const pick = names.find(function (x) { return x.id === chosen; });
-          events.push(e.name + " 第 " + (i + 1) + " 槽：1d6 = " + dice.die1 + "／" + dice.die2 +
-            " → 選擇 " + (pick ? pick.name : chosen));
+          const pick = menu.options.find(function (x) { return x.id === chosen; });
+          events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
+            (menu.forcedSingleAttack ? "（攻擊選項只有一個，但可改用防禦技）" : "") +
+            " → 選擇 " + (pick ? pick.name : chosen) +
+            (pick && pick.kind === "defense" ? "（防禦技）" : ""));
         }
-        // 存下菜單與骰值 → 階段二若要「改技能」可用當初骰出的同一份菜單重選
+        // 存下菜單與骰值 → 階段二若要「改技能」可用同一份菜單重選
         e.drawnSkills.push({
           slotIndex: i, skillId: chosen,
-          menuOptions: names, dice: [dice.die1, dice.die2]
+          menuOptions: menu.options, dice: [dice.die1, dice.die2]
         });
       }
     }
@@ -572,10 +605,12 @@
    * 所以任何一個槽位都可以改成用防禦技 —— 這正是 KP 訂正錯誤宣告最常需要的路徑。
    */
   function rechooseOptions(entity, drawn) {
-    const opts = (drawn.menuOptions || []).map(function (o) { return { id: o.id, name: o.name }; });
+    const opts = (drawn.menuOptions || []).map(function (o) {
+      return { id: o.id, name: o.name, kind: o.kind || "attack" };
+    });
     defenseSkills(entity).forEach(function (sk) {
       if (!opts.some(function (o) { return o.id === sk.id; })) {
-        opts.push({ id: sk.id, name: sk.name + "（防禦技・不受抽選限制）" });
+        opts.push({ id: sk.id, name: sk.name, kind: "defense" });
       }
     });
     return opts;
@@ -709,7 +744,7 @@
         const e = battle.entities.find(function (x) { return x.id === ans.addAction.entityId; });
         if (e) {
           const idx = nextFreeSlotIndex(e);
-          const defs = defenseSkills(e).map(function (sk) { return { id: sk.id, name: sk.name }; });
+          const defs = defenseSkills(e).map(function (sk) { return { id: sk.id, name: sk.name, kind: "defense" }; });
           if (idx === null) {
             events.push("⚠ " + e.name + " 沒有空閒槽位（共 " + (e.slots || 0) + " 槽、已用 " +
               (e.drawnSkills || []).length + "），無法新增行動");
