@@ -149,6 +149,55 @@
       S.addLayer(e3, "迅捷", 99); eq(S.layerOf(e3, "迅捷"), 10, "迅捷層數上限 10");
     }
 
+    section("級數防呆：只有級數驅動狀態能加級數");
+    {
+      // hasLevel 分類正確
+      eq(["凝神", "震顫", "萎靡", "延燒", "失血", "開裂"].every(S.hasLevel), true,
+        "六個級數驅動狀態 hasLevel = true");
+      eq(["守護", "易損", "傷害強化", "傷害弱化", "迅捷", "綁縛", "強壯", "虛弱", "屏息", "遲鈍", "恍惚"]
+        .some(S.hasLevel), false, "層數驅動狀態（含恍惚）hasLevel 全為 false");
+      eq(S.BURST_TAGS.some(S.hasLevel), false, "瀑標記 hasLevel = false");
+      eq(S.hasLevel("lady_gaze"), false, "自訂印記 hasLevel = false");
+
+      // 層數驅動狀態：加級數被擋
+      const e = mkEntity({});
+      S.addLayer(e, "守護", 3);
+      const r1 = S.addLevel(e, "守護", 5);
+      eq(r1.dropped, true, "對【守護】加級數 → 丟棄");
+      eq(S.levelOf(e, "守護"), 0, "【守護】級數維持 0");
+      eq(/層數驅動/.test(r1.reason), true, "回報原因說明它是層數驅動狀態");
+
+      // 自訂印記：加級數被擋
+      S.addLayer(e, "lady_gaze", 2);
+      const r2 = S.addLevel(e, "lady_gaze", 3);
+      eq(r2.dropped, true, "對自訂印記【lady_gaze】加級數 → 丟棄");
+      eq(/印記/.test(r2.reason), true, "回報原因說明它是印記");
+
+      // 瀑標記：加級數被擋
+      S.addLayer(e, "血瀑", 1);
+      const r3 = S.addLevel(e, "血瀑", 4);
+      eq(r3.dropped, true, "對【血瀑】加級數 → 丟棄");
+      eq(/純標籤/.test(r3.reason), true, "回報原因說明它是純標籤");
+
+      // 級數驅動狀態：正常
+      S.addLayer(e, "凝神", 2);
+      const r4 = S.addLevel(e, "凝神", 7);
+      eq(r4.dropped, false, "對【凝神】加級數 → 正常");
+      eq(S.levelOf(e, "凝神"), 7, "【凝神】級數 = 7");
+
+      // apply() 會把防呆警告寫進事件
+      const e2 = mkEntity({});
+      const evs = S.apply(e2, "強壯", 2, 3);
+      eq(evs.some(function (m) { return /無效/.test(m) && /強壯/.test(m); }), true,
+        "apply() 對層數驅動狀態的級數推一條「無效」警告");
+      eq(S.layerOf(e2, "強壯"), 2, "層數照樣生效（只有級數被丟棄）");
+
+      // 減級數不受此限（清理用），且既有「層 0 不能預存」仍在
+      const e3 = mkEntity({});
+      const r5 = S.addLevel(e3, "凝神", 5);
+      eq(r5.dropped, true, "級數驅動狀態但層數為 0 → 仍然不能預存");
+    }
+
     section("綠幣對消：被對消的紅幣是「損失」，不觸發追加攻擊");
     {
       const green = mkSkill({ coins: ["green", "green"] });
@@ -312,6 +361,61 @@
       S.addLayer(a, "綁縛", 10); // 20 × 0.5 = 10
       eq(order.map(function (x) { return x.id; }), ["a", "b", "c"],
         "回合中途 DEX 改變，本回合順序不變（快照）");
+    }
+
+    section("buildPairing 可反覆呼叫做預覽（不寫 log、無殘留狀態）");
+    {
+      const atk = mkEntity({ id: "atk", name: "刺客", isPC: false, dex: 8, canAct: true });
+      const weak = mkEntity({ id: "weak", name: "脆皮", isPC: true, dex: 6, canAct: true });
+      const guard = mkEntity({ id: "grd", name: "鐵衛", isPC: true, dex: 18, canAct: true });
+      const skA = mkSkill({ id: "a1", coins: ["normal"] });
+      const skG = mkSkill({ id: "g1", type: "defense", coins: ["normal"] });
+      atk.skillLibrary = [skA]; guard.skillLibrary = [skG]; weak.skillLibrary = [skA];
+      atk.declarations = [{ slotIndex: 0, skillId: "a1", action: "attack", targetId: "weak" }];
+      guard.declarations = [{ slotIndex: 0, skillId: "g1", action: "intercept", targetId: "atk", protectId: "weak" }];
+      const battle = { entities: [atk, weak, guard], turnOrder: [guard, atk, weak] };
+
+      const p1 = T.buildPairing(battle);
+      const p2 = T.buildPairing(battle);
+      eq(JSON.stringify(summarize(p1.entries)), JSON.stringify(summarize(p2.entries)),
+        "連續呼叫兩次 → 配對結果完全相同（無殘留的攔截標記）");
+      eq(p1.notes.length, p2.notes.length, "攔截判定 notes 數量也相同（不會累積）");
+      eq(p1.entries.length, 1, "產生一組配對");
+      eq(p1.entries[0].kind, "clash", "攔截成立 → 變成拚點");
+      eq(p1.entries[0].bEntityId, "grd", "拚點對手換成攔截者鐵衛");
+      eq(p1.notes.some(function (n) { return n.ok && /攔截成立/.test(n.text); }), true, "notes 記錄攔截成立");
+
+      // DEX 不足 → 攔截被拒，且 notes 說明原因
+      guard.dex = 5;
+      const p3 = T.buildPairing(battle);
+      eq(p3.entries[0].kind, "unilateral", "攔截被拒 → 變回單方面攻擊");
+      eq(p3.notes.some(function (n) { return !n.ok && /嚴格大於/.test(n.text); }), true, "notes 說明被拒原因");
+    }
+    function summarize(entries) {
+      return entries.map(function (en) {
+        return [en.kind, en.aEntityId, en.aSkillId, en.bEntityId || "", en.targetId || ""].join("|");
+      });
+    }
+
+    section("宣告一覽（行動確認板的資料來源）");
+    {
+      const e = mkEntity({ id: "p1", name: "測試PC", isPC: true, dex: 10, canAct: true });
+      const s1 = mkSkill({ id: "s1", name: "招一", coins: ["normal"] });
+      const s2 = mkSkill({ id: "s2", name: "招二", coins: ["normal"] });
+      e.skillLibrary = [s1, s2];
+      e.drawnSkills = [
+        { slotIndex: 0, skillId: "s1", menuOptions: [{ id: "s1", name: "招一" }, { id: "s2", name: "招二" }], dice: [1, 4] },
+        { slotIndex: 1, skillId: "s2", menuOptions: [{ id: "s2", name: "招二" }], dice: [4, 5] }
+      ];
+      e.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "p1" }];
+      const battle = { entities: [e], turnOrder: [e] };
+      const board = T.buildDeclarationBoard(battle);
+      eq(board.length, 2, "每個槽位一列");
+      eq(board[0].canRechoose, true, "菜單有兩個選項 → 可以改技能");
+      eq(board[1].canRechoose, false, "被迫單選 → 不能改技能");
+      eq(board[0].action, "attack", "帶出已宣告的動作");
+      eq(board[1].action, null, "尚未宣告的槽位 action 為 null");
+      eq(board[0].dice, [1, 4], "帶出當初骰值供 KP 核對");
     }
 
     section("攔截資格：有效 DEX 嚴格大於");

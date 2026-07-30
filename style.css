@@ -378,10 +378,142 @@ textarea.mini-json {
 @media (max-width: 768px) {
   input[type=text], input[type=number], select, textarea { font-size: 16px; min-height: 44px; }
   button { min-height: 44px; }
-  .kp-row input, .kp-row select, .kp-row button { min-height: 38px; font-size: 14px; }
   main { padding: var(--space-3); }
   header { padding: var(--space-2) var(--space-3); }
   header h1 { font-size: var(--text-sm); }
+}
+
+/* ============ 行動確認板（階段二） ============ */
+.action-board {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin: var(--space-2) 0 var(--space-3);
+}
+.board-row {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.board-row:last-child { border-bottom: none; }
+.board-row:nth-child(odd) { background: rgba(255,255,255,.015); }
+.br-who { display: flex; align-items: center; gap: 6px; min-width: 190px; }
+.br-name { font-weight: 600; color: var(--color-foreground-strong); }
+.br-what { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 220px; flex-wrap: wrap; }
+.br-skill { color: var(--color-accent-fg); font-weight: 500; }
+.br-action { color: var(--color-foreground); font-size: var(--text-sm); }
+.br-ops { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.br-ops button { min-height: 32px; padding: 4px 12px; font-size: var(--text-xs); }
+
+@media (max-width: 768px) {
+  .board-row { flex-direction: column; align-items: stretch; }
+  .br-ops { margin-left: 0; }
+  .br-ops button { min-height: 40px; flex: 1; }
+}
+
+/* ============ 角色詳情浮窗 ============ */
+body.modal-open { overflow: hidden; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(4, 7, 15, 0.72);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: var(--space-5) var(--space-4);
+  overflow-y: auto;
+}
+.modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  width: 100%; max-width: 760px;
+  max-height: calc(100vh - var(--space-6));
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+.modal-head {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-3);
+  position: sticky; top: calc(var(--space-5) * -1);
+  background: var(--color-surface);
+}
+.modal-title { margin: 0; font-size: var(--text-lg); color: var(--color-foreground-strong); }
+.modal-close { margin-left: auto; flex-shrink: 0; }
+.modal-section { margin: var(--space-4) 0; }
+.modal-sec-title {
+  font-size: var(--text-sm); color: var(--color-accent-fg);
+  text-transform: uppercase; letter-spacing: .07em;
+  margin: 0 0 var(--space-2);
+  padding-bottom: 3px; border-bottom: 1px solid var(--color-border);
+}
+.detail-grid {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 4px var(--space-4); font-size: var(--text-sm);
+}
+.detail-grid .dk { color: var(--color-muted-fg); }
+.detail-grid .dv { color: var(--color-foreground); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.detail-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255,255,255,.02);
+  padding: var(--space-3);
+  margin: var(--space-2) 0;
+}
+.detail-card.missing { border-color: rgba(220,38,38,.5); }
+.dc-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.dc-name { font-weight: 600; color: var(--color-foreground-strong); font-size: var(--text-md); }
+.dc-nums {
+  display: flex; gap: var(--space-3); flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--color-accent-fg); margin-bottom: 6px;
+}
+.dc-text {
+  margin: 6px 0 0; font-size: var(--text-sm); line-height: 1.7;
+  color: var(--color-foreground);
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-3);
+  white-space: pre-wrap;
+}
+.coin-seq { display: flex; gap: 3px; flex-wrap: wrap; margin: 4px 0 6px; }
+.coin-seq .coin { width: 22px; height: 22px; line-height: 22px; font-size: 11px; cursor: help; }
+
+.state-rows { display: flex; flex-direction: column; gap: 3px; }
+.state-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; font-size: var(--text-sm); }
+.state-row .sr-name { font-weight: 600; min-width: 84px; }
+.state-row .sr-name.mark { color: var(--color-warning); }
+.state-row .sr-val { font-family: var(--font-mono); color: var(--color-accent-fg); min-width: 100px; }
+
+.kp-grid { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.state-editor { margin-top: var(--space-3); }
+.kp-row span.disabled { opacity: .4; text-decoration: line-through; }
+.kp-row input:disabled, .kp-row select:disabled { opacity: .4; cursor: not-allowed; }
+
+.card-more {
+  margin-top: var(--space-2); padding-top: 6px;
+  border-top: 1px dashed var(--color-border-strong);
+  font-size: 11px; color: var(--color-muted-fg); text-align: center;
+}
+.entity-card[role="button"] { cursor: pointer; }
+.entity-card[role="button"]:hover { border-color: var(--color-border-strong); background: var(--color-surface-2); }
+.entity-card[role="button"]:hover .card-more { color: var(--color-accent-fg); }
+.entity-card[role="button"]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.roster-line[role="button"] { cursor: pointer; border-radius: var(--radius-sm); padding: 2px 6px; }
+.roster-line[role="button"]:hover { background: var(--color-surface-2); color: var(--color-accent-fg); }
+.roster-line[role="button"]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+@media (max-width: 768px) {
+  .modal-overlay { padding: 0; }
+  .modal {
+    max-width: none; min-height: 100vh; border-radius: 0; border: none;
+    max-height: none; padding: var(--space-4);
+  }
+  .modal-head { position: sticky; top: 0; padding-top: var(--space-2); }
+  .detail-grid { grid-template-columns: 1fr; gap: 0 0; }
+  .detail-grid .dk { margin-top: var(--space-2); font-size: var(--text-xs); }
 }
 
 /* ============ v2 新增元件 ============ */
@@ -445,10 +577,11 @@ textarea.mini-json {
   border-top: 1px dashed var(--color-border-strong);
   display: flex; flex-direction: column; gap: 4px;
 }
-.kp-row { display: flex; align-items: center; gap: 5px; font-size: var(--text-xs); color: var(--color-muted-fg); }
-.kp-row input { min-height: 30px; padding: 3px 6px; width: 68px; font-size: var(--text-xs); }
-.kp-row select { min-height: 30px; padding: 3px 6px; font-size: var(--text-xs); flex: 1; min-width: 0; }
-.kp-row button { min-height: 30px; padding: 3px 10px; font-size: var(--text-xs); }
+/* KP 調值列（現在住在角色詳情浮窗裡，空間充裕 → 用舒適的尺寸而非早期的擠壓版） */
+.kp-row { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--color-muted-fg); flex-wrap: wrap; }
+.kp-row input { min-height: 36px; padding: 5px 8px; width: 84px; font-size: var(--text-sm); }
+.kp-row select { min-height: 36px; padding: 5px 8px; font-size: var(--text-sm); flex: 1; min-width: 120px; }
+.kp-row button { min-height: 36px; padding: 5px 14px; font-size: var(--text-sm); }
 
 .log-entry.pairing { color: var(--color-accent-fg); font-weight: 600; margin-top: 4px; }
 .log-entry.warn { color: var(--color-warning); }
@@ -557,3 +690,16 @@ textarea.mini-json {
 .log-entry.dmg { color: var(--color-destructive-hover); }
 .log-entry.heal { color: var(--color-success); }
 .log-entry.info { color: var(--color-muted-fg); }
+
+/* ============ 行動裝置最終覆寫（放檔尾以確保優先） ============ */
+@media (max-width: 768px) {
+  .kp-row { gap: 8px; }
+  /* 觸控目標 >=44px、輸入框 >=16px 以避免 iOS 自動縮放 */
+  .kp-row input, .kp-row select, .kp-row button { min-height: 44px; font-size: 16px; }
+  .kp-row input { width: 100px; }
+  .kp-grid { flex-direction: column; align-items: stretch; }
+  .kp-grid .kp-row { justify-content: space-between; }
+  .state-editor .kp-row { flex-direction: column; align-items: stretch; }
+  .state-editor .kp-row select, .state-editor .kp-row input, .state-editor .kp-row button { width: 100%; }
+  .modal-close { min-height: 44px; }
+}

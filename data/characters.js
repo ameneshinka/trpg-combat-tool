@@ -74,7 +74,8 @@
       coins: o.coins || [],               // 有順序；設計慣例：普通幣在前段、紅幣在後段
       onUse: o.onUse || null,             // function(ctx) 使用時
       onHit: o.onHit || null,             // function(ctx) 命中時
-      notes: o.notes || ""
+      text: o.text || "",                 // ★ 技能文本：角卡上的原文，桌邊查詢用（顯示在角色詳情浮窗）
+      notes: o.notes || ""                //   設計備註：給設計者看的，與 text 分開顯示
     };
   }
 
@@ -120,7 +121,10 @@
       basePower: helpers.basePowerFromProficiency(siz),
       coinPower: helpers.coinPowerFromAttribute(con),
       coins: ["normal"],
-      notes: "臨時生命值 + 最終威力 × 5（在回合結束的傷害結算完之後才歸零）"
+      text: "增加「最終威力 × 5」的臨時生命值。基礎威力取自 SIZ、硬幣威力取自 CON。" +
+        "不受抽選限制（想用就能用），佔一個槽位，同一回合可使用多次。",
+      notes: "臨時生命值在階段六「回合結束傷害結算完之後」才歸零。" +
+        "本工具的裁決：使用即生效，不論拚點輸贏（否則拚贏本來就不會被打中，效果近乎無用）"
     };
   }
   function makeDodge(dodgeSkillValue, luk) {
@@ -129,7 +133,11 @@
       basePower: helpers.basePowerFromProficiency(dodgeSkillValue),
       coinPower: helpers.coinPowerFromAttribute(luk),
       coins: ["normal"],
-      notes: "躲掉攻擊型技能；⚠ 硬幣損失持續到回合結束 —— 拚贏可一直擋，拚輸則本回合全中"
+      text: "躲掉進攻的攻擊型技能，使其無法命中。基礎威力取自「閃避」技能、硬幣威力取自 LUK。" +
+        "不受抽選限制，佔一個槽位，同一回合可使用多次。",
+      notes: "⚠ 硬幣作用域的唯一例外：閃躲的硬幣一旦損失，持續到回合結束才恢復。" +
+        "拚贏（未損失）→ 可以繼續用同一個閃躲擋下一個攻擊，次數不限；" +
+        "拚輸 → 本回合剩下的所有攻擊都會命中"
     };
   }
 
@@ -144,13 +152,18 @@
     skillLibrary: [
       { id: "t_red", name: "四紅幣測試", basePower: 7, coinPower: 3,
         coins: ["red", "red", "red", "red"],
+        text: "全紅幣技能。紅幣拚輸時不會消失，只會「碎幣」（本次使用期間硬幣威力視為 +1），" +
+          "因此可擲數恆為 4，攻擊次數也恆為 4 下。判輸時機＝所有紅幣皆已碎幣。",
         notes: "clash.md 驗算：拚點威力 19 → 17 → 15；傷害打 4 下 8/9/12/15" },
       { id: "t_normal", name: "四普通幣測試", basePower: 7, coinPower: 9,
         coins: ["normal", "normal", "normal", "normal"],
+        text: "全普通幣技能。普通幣拚輸即「損失」（暫時退出序列），可擲數與攻擊次數隨之下降 —— " +
+          "普通幣像盾，連敗會雪崩。",
         notes: "damage.md 驗算：損失 1 枚、乘數 4、正反正 → 83/83/128 合計 294" },
       { id: "t_mixed", name: "混搭測試", basePower: 5, coinPower: 4,
         coins: ["normal", "normal", "red", "red"],
-        notes: "設計慣例：普通幣前段（當盾）、紅幣後段（續航）" },
+        text: "混搭型別：前段兩枚普通幣當緩衝（輸掉即損失），撐過前幾次交換後進入後段紅幣的持久戰。",
+        notes: "設計慣例：普通幣連續置於前段、紅幣連續置於後段，不交叉排列" },
       makeGuard(50, 50), makeDodge(50, 50)
     ],
     slotMap: { A: "t_red", B: "t_normal", C: "t_mixed" },
@@ -162,9 +175,12 @@
     hp: 1000, dex: 12,
     attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
     skillLibrary: [
-      { id: "tt_poke", name: "戳", basePower: 1, coinPower: 1, coins: ["normal"] },
-      { id: "tt_poke2", name: "再戳", basePower: 2, coinPower: 1, coins: ["normal", "normal"] },
-      { id: "tt_poke3", name: "重戳", basePower: 3, coinPower: 2, coins: ["normal"] },
+      { id: "tt_poke", name: "戳", basePower: 1, coinPower: 1, coins: ["normal"],
+        text: "最弱的單幣攻擊。1 枚普通幣的技能「輸不起任何一次交換」，但仍能拚（不是一進場就判輸）。" },
+      { id: "tt_poke2", name: "再戳", basePower: 2, coinPower: 1, coins: ["normal", "normal"],
+        text: "兩枚普通幣的攻擊，用來觀察逐枚傷害結算與反面照打的行為。" },
+      { id: "tt_poke3", name: "重戳", basePower: 3, coinPower: 2, coins: ["normal"],
+        text: "單幣但基礎威力較高，用來測試拚點威力比較。" },
       makeGuard(50, 50), makeDodge(50, 50)
     ],
     slotMap: { A: "tt_poke", B: "tt_poke2", C: "tt_poke3" },

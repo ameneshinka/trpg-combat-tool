@@ -34,6 +34,17 @@
   States.LAYER_CAPS = LAYER_CAPS;
   States.isBurstTag = function (n) { return BURST_TAGS.indexOf(n) !== -1; };
   States.isLevelDriven = function (n) { return LEVEL_DRIVEN.indexOf(n) !== -1; };
+  States.isLayerDriven = function (n) { return LAYER_DRIVEN.indexOf(n) !== -1; };
+
+  /**
+   * 這個狀態「有沒有級數」這個概念？
+   * 依 states.md 與 rulings #7：只有 LEVEL_DRIVEN 那六個是級數驅動；
+   * 持續生效那批與【恍惚】只有層數；瀑系列是純標籤；
+   * 自訂印記依 authoring.md 也是「純標籤、只有層數」→ 一律沒有級數。
+   * 供 UI 決定要不要開放「級」欄位，也供 addLevel 擋掉無意義的資料。
+   */
+  function hasLevel(name) { return LEVEL_DRIVEN.indexOf(name) !== -1; }
+  States.hasLevel = hasLevel;
 
   // ---------------- 基本存取 ----------------
   function get(entity, name) {
@@ -70,12 +81,23 @@
   }
 
   /**
-   * 加減級數。
-   * ⚠ 級數必須依附層數：層數為 0 時，「增加」級數的效果直接丟棄（不能預存）。
+   * 加減級數。兩道防呆：
+   * ⚠ ① 這個狀態必須「有級數」這個概念（只有 LEVEL_DRIVEN 六個有）。
+   *      對層數驅動狀態／瀑標記／自訂印記加級數是無意義的資料 → 直接丟棄並回報。
+   * ⚠ ② 級數必須依附層數：層數為 0 時，「增加」級數的效果直接丟棄（不能預存）。
    */
   function addLevel(entity, name, delta, opts) {
     opts = opts || {};
     const st = ensure(entity, name);
+    if (delta > 0 && !hasLevel(name)) {
+      return {
+        dropped: true,
+        reason: States.isBurstTag(name) ? "【" + name + "】是純標籤，沒有級數"
+          : States.isLayerDriven(name) ? "【" + name + "】是層數驅動狀態，沒有級數"
+          : "【" + name + "】是印記（純標籤），沒有級數",
+        state: st
+      };
+    }
     if (delta > 0 && (st.layer || 0) <= 0) {
       return { dropped: true, reason: "層數為 0，級數無法預存", state: st };
     }
@@ -103,8 +125,8 @@
     if (levelDelta) {
       const r = addLevel(entity, name, levelDelta, opts);
       if (r.dropped) {
-        events.push("⚠ " + entity.name + " 的【" + name + "】級數 +" + levelDelta +
-          " 無效：層數為 0，級數不能預存");
+        events.push("⚠ " + entity.name + " 的【" + name + "】級數 " +
+          (levelDelta > 0 ? "+" : "") + levelDelta + " 無效：" + r.reason);
       } else {
         events.push(entity.name + " 的【" + name + "】級數 " + (levelDelta > 0 ? "+" : "") + levelDelta +
           "（現 " + levelOf(entity, name) + " 級）");

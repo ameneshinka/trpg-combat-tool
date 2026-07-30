@@ -110,8 +110,18 @@
       card.appendChild(box);
     }
 
-    // KP 數值臨時覆寫（加分項：桌邊發現不對可當場調）
-    if (opts.kpControls) card.appendChild(kpOverride(e, opts.onChange));
+    // 卡片＝可點擊元件 → 開角色詳情浮窗（技能文本／被動文本／KP 調值都在裡面）
+    card.appendChild(el("div", { cls: "card-more", text: "點擊查看技能與被動文本" }));
+    card.setAttribute("role", "button");
+    card.setAttribute("tabindex", "0");
+    card.setAttribute("aria-label", "查看 " + e.name + " 的角色詳情");
+    function openDetail() {
+      if (global.Detail) global.Detail.open(e, { kpControls: opts.kpControls !== false, onChange: opts.onChange });
+    }
+    card.addEventListener("click", openDetail);
+    card.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openDetail(); }
+    });
     return card;
   }
   Panels.renderEntityCard = renderEntityCard;
@@ -121,10 +131,15 @@
     let txt = x.name;
     if (!x.tagOnly) {
       txt += " " + (st.layer || 0) + "層";
-      if (S.isLevelDriven(x.name) || (st.level || 0) > 0) txt += "·" + (st.level || 0) + "級";
+      // 只有「有級數」的狀態才顯示級數；層數驅動狀態顯示「·0級」是無意義的雜訊
+      if (S.hasLevel(x.name)) txt += "·" + (st.level || 0) + "級";
     }
     const chip = el("span", { cls: "state-chip" + (isMark ? " mark" : ""), text: txt });
-    if (st.addedThisTurn) chip.title = "本回合結束時豁免層數 −1";
+    const hints = [];
+    if (st.addedThisTurn) hints.push("本回合結束時豁免層數 −1");
+    if (x.tagOnly) hints.push("純標籤：沒有層／級的數值意義，靠對應殘響效果引爆");
+    else if (!S.hasLevel(x.name)) hints.push("此狀態只有層數（效果 = 層數 × 值）");
+    if (hints.length) chip.title = hints.join("；");
     return chip;
   }
 
@@ -135,57 +150,7 @@
     return line;
   }
   Panels.statLine = statLine;
-
-  function kpOverride(e, onChange) {
-    const wrap = el("div", { cls: "kp-override" });
-    function numField(label, get, set, min, max) {
-      const row = el("label", { cls: "kp-row" });
-      row.appendChild(el("span", { text: label }));
-      const i = el("input"); i.type = "number"; i.value = get();
-      if (min !== undefined) i.min = min;
-      if (max !== undefined) i.max = max;
-      i.setAttribute("aria-label", label);
-      i.addEventListener("change", function () {
-        set(Number(i.value));
-        if (onChange) onChange();
-      });
-      row.appendChild(i);
-      return row;
-    }
-    wrap.appendChild(numField("HP", function () { return e.hp; },
-      function (v) { e.hp = Math.max(0, Math.min(e.maxHp, v)); }, 0, e.maxHp));
-    wrap.appendChild(numField("臨時HP", function () { return e.tempHp; },
-      function (v) { e.tempHp = Math.max(0, v); }, 0));
-    wrap.appendChild(numField("專注力", function () { return e.focus; },
-      function (v) { e.focus = S.clampFocus(v); }, -40, 40));
-    wrap.appendChild(numField("槽位", function () { return e.slots || 0; },
-      function (v) { e.slots = Math.max(0, v); }, 0));
-
-    // 狀態微調
-    const st = el("div", { cls: "kp-row" });
-    const nameSel = el("select");
-    nameSel.setAttribute("aria-label", "狀態名");
-    const allNames = [].concat(S.LAYER_DRIVEN, S.LEVEL_DRIVEN, S.BURST_TAGS,
-      Object.keys(e.states || {}).filter(function (n) {
-        return S.LAYER_DRIVEN.indexOf(n) === -1 && S.LEVEL_DRIVEN.indexOf(n) === -1 && S.BURST_TAGS.indexOf(n) === -1;
-      }));
-    allNames.forEach(function (n) { const o = el("option", { text: n }); o.value = n; nameSel.appendChild(o); });
-    const lay = el("input"); lay.type = "number"; lay.value = "1"; lay.style.width = "54px"; lay.setAttribute("aria-label", "層數增減");
-    const lev = el("input"); lev.type = "number"; lev.value = "0"; lev.style.width = "54px"; lev.setAttribute("aria-label", "級數增減");
-    const btn = el("button", { text: "套用" });
-    btn.type = "button";
-    btn.onclick = function () {
-      S.apply(e, nameSel.value, Number(lay.value) || 0, Number(lev.value) || 0);
-      if (onChange) onChange();
-    };
-    st.appendChild(nameSel);
-    st.appendChild(el("span", { text: "層" })); st.appendChild(lay);
-    st.appendChild(el("span", { text: "級" })); st.appendChild(lev);
-    st.appendChild(btn);
-    wrap.appendChild(st);
-    return wrap;
-  }
-
+  // KP 數值覆寫與狀態微調已移入角色詳情浮窗（ui/detail.js），卡面保持唯讀、乾淨
   // ---------------- 面板群 ----------------
   function renderPanels(container, battle, opts) {
     opts = opts || {};

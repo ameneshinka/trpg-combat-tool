@@ -288,7 +288,11 @@
           events.push(e.name + " 第 " + (i + 1) + " 槽：1d6 = " + dice.die1 + "／" + dice.die2 +
             " → 選擇 " + (pick ? pick.name : chosen));
         }
-        e.drawnSkills.push({ slotIndex: i, skillId: chosen });
+        // 存下菜單與骰值 → 階段二若要「改技能」可用當初骰出的同一份菜單重選
+        e.drawnSkills.push({
+          slotIndex: i, skillId: chosen,
+          menuOptions: names, dice: [dice.die1, dice.die2]
+        });
       }
     }
 
@@ -315,7 +319,11 @@
    * 攔截：把攻擊的目標轉移到攔截者身上（資格：有效 DEX 嚴格大於原目標）。
    * 配對結果三種：clash（雙方拚點）／unilateral（單方面攻擊）／defenseOnly（防禦技無對手）
    */
-  function buildPairing(battle, events) {
+  // ⚠ 這個函式會在階段二被「反覆呼叫」做預覽（KP 改宣告後要重算），
+  //   所以它不能寫 log、也不能留下狀態：攔截判定訊息改為回傳 notes，
+  //   由呼叫端決定要不要寫進事件紀錄。rec 物件每次都重新建立，天然無殘留。
+  function buildPairing(battle) {
+    const notes = [];
     const byId = {};
     battle.entities.forEach(function (e) { byId[e.id] = e; });
 
@@ -338,11 +346,11 @@
         if (ic.consumed) return false;
         if (ic.decl.protectId !== atk.decl.targetId) return false;
         if (!mayInterceptPlayerSide(ic.entity)) {
-          events.push("攔截被拒：" + ic.entity.name + " 非玩家方，依規則不能攔截打向玩家的攻擊（且無攔截例外被動）");
+          notes.push({ ok: false, text: "攔截被拒：" + ic.entity.name + " 非玩家方，依規則不能攔截打向玩家的攻擊（且無攔截例外被動）" });
           return false;
         }
         if (!canIntercept(ic.entity, origTarget)) {
-          events.push("攔截被拒：" + ic.entity.name + " 的有效 DEX 未「嚴格大於」" + origTarget.name);
+          notes.push({ ok: false, text: "攔截被拒：" + ic.entity.name + " 的有效 DEX 未「嚴格大於」" + origTarget.name });
           return false;
         }
         return true;
@@ -354,9 +362,9 @@
         win.consumed = true;
         atk.redirectTo = win.entity.id;
         atk.pairedWith = win;
-        events.push("攔截成立：" + win.entity.name + "（DEX " + S.effectiveDex(win.entity).toFixed(1) +
+        notes.push({ ok: true, text: "攔截成立：" + win.entity.name + "（DEX " + S.effectiveDex(win.entity).toFixed(1) +
           "）把 " + atk.entity.name + " 對 " + origTarget.name + "（DEX " +
-          S.effectiveDex(origTarget).toFixed(1) + "）的攻擊搶到自己身上");
+          S.effectiveDex(origTarget).toFixed(1) + "）的攻擊搶到自己身上" });
       }
     });
 
@@ -411,7 +419,7 @@
       });
     });
 
-    return entries;
+    return { entries: entries, notes: notes };
   }
   Turn.buildPairing = buildPairing;
 
@@ -524,6 +532,75 @@
     }
   }
 
+  // ---------------- 階段二的宣告輔助 ----------------
+  /**
+   * 問一個槽位的宣告（動作／目標）並寫回 entity.declarations。
+   * isRedo=true 時是「重新宣告」：先清掉該槽位舊的宣告，避免同一槽位留下兩筆。
+   */
+  function* askDeclare(battle, e, drawn, isRedo, events) {
+    const sk = findSkill(e, drawn.skillId);
+    const prev = (e.declarations || []).find(function (d) { return d.slotIndex === drawn.slotIndex; });
+    if (isRedo) {
+      e.declarations = (e.declarations || []).filter(function (d) { return d.slotIndex !== drawn.slotIndex; });
+    }
+    const decl = yield {
+      type: "declare", entityId: e.id, name: e.name,
+      slotIndex: drawn.slotIndex, skillId: drawn.skillId,
+      skillName: sk ? sk.name : drawn.skillId,
+      skillType: sk ? sk.type : "attack",
+      isDodge: !!(sk && sk.isDodge), isGuard: !!(sk && sk.isGuard),
+      isRedo: !!isRedo,
+      previous: prev ? { action: prev.action, targetId: prev.targetId, protectId: prev.protectId } : null
+    };
+    e.declarations.push({
+      slotIndex: drawn.slotIndex, skillId: drawn.skillId,
+      action: decl.action, targetId: decl.targetId, protectId: decl.protectId
+    });
+    if (isRedo && events) {
+      const t = battle.entities.find(function (x) { return x.id === decl.targetId; });
+      const actionText = decl.action === "attack" ? "攻擊" : decl.action === "intercept" ? "攔截" : "防禦";
+      events.push("↺ " + e.name + " 第 " + (drawn.slotIndex + 1) + " 槽重新宣告：" +
+        actionText + (t ? " → " + t.name : ""));
+    }
+    return decl;
+  }
+
+  /**
+   * 供 KP 確認畫面用的「行動一覽」：依 DEX 序列列出每個 actor 的每個槽位與其宣告。
+   * canRechoose = 當初骰出的菜單有 2 個選項才可以改技能（被迫單選的沒得改）。
+   */
+  function buildDeclarationBoard(battle) {
+    const byId = {};
+    battle.entities.forEach(function (x) { byId[x.id] = x; });
+    const rows = [];
+    (battle.turnOrder || battle.entities).forEach(function (e) {
+      if (!e.canAct) return;
+      (e.drawnSkills || []).forEach(function (drawn) {
+        const sk = findSkill(e, drawn.skillId);
+        const d = (e.declarations || []).find(function (x) { return x.slotIndex === drawn.slotIndex; });
+        const tgt = d && byId[d.targetId], pro = d && byId[d.protectId];
+        rows.push({
+          entityId: e.id, entityName: e.name, isPC: !!e.isPC,
+          dex: S.effectiveDex(e),
+          slotIndex: drawn.slotIndex,
+          skillId: drawn.skillId,
+          skillName: sk ? sk.name : drawn.skillId,
+          skillType: sk ? sk.type : "attack",
+          isDodge: !!(sk && sk.isDodge), isGuard: !!(sk && sk.isGuard),
+          action: d ? d.action : null,
+          targetId: d ? d.targetId : null,
+          targetName: tgt ? tgt.name : null,
+          protectId: d ? d.protectId : null,
+          protectName: pro ? pro.name : null,
+          canRechoose: (drawn.menuOptions || []).length > 1,
+          dice: drawn.dice || []
+        });
+      });
+    });
+    return rows;
+  }
+  Turn.buildDeclarationBoard = buildDeclarationBoard;
+
   // ---------------- 完整一回合（六階段） ----------------
   function* runTurn(battle, events) {
     events.push("═══ 回合 " + battle.turnNumber + " ═══");
@@ -535,29 +612,62 @@
     }
     yield* runTurnStartPhase(battle, events);
 
-    // 階段二
+    // 階段二：宣告 → 確認（可回頭改）
     events.push("【階段二】宣告與配對");
     for (const e of battle.turnOrder) {
       if (!e.canAct || !e.drawnSkills.length) continue;
       for (const drawn of e.drawnSkills) {
-        const sk = findSkill(e, drawn.skillId);
-        const decl = yield {
-          type: "declare", entityId: e.id, name: e.name,
-          slotIndex: drawn.slotIndex, skillId: drawn.skillId,
-          skillName: sk ? sk.name : drawn.skillId,
-          skillType: sk ? sk.type : "attack",
-          isDodge: !!(sk && sk.isDodge), isGuard: !!(sk && sk.isGuard)
-        };
-        e.declarations.push({
-          slotIndex: drawn.slotIndex, skillId: drawn.skillId,
-          action: decl.action, targetId: decl.targetId, protectId: decl.protectId
-        });
+        yield* askDeclare(battle, e, drawn, false, events);
       }
       // 防禦技不受抽選限制：KP／玩家可額外宣告（各佔一槽，同回合可多次）
     }
-    const proposed = buildPairing(battle, events);
-    const confirmed = yield { type: "confirmPairing", proposed: proposed };
-    const finalEntries = confirmed && confirmed.entries ? confirmed.entries : proposed;
+
+    // 確認迴圈：KP 若發現宣告有誤，可改宣告／改技能／移除，改完重算配對再確認
+    let finalEntries = null;
+    let lastNotes = [];
+    while (true) {
+      const pairing = buildPairing(battle);   // 純預覽：不寫 log、可反覆呼叫
+      lastNotes = pairing.notes;
+      const ans = yield {
+        type: "confirmPairing",
+        proposed: pairing.entries,
+        notes: pairing.notes,
+        board: buildDeclarationBoard(battle)
+      };
+
+      // ［改技能］先用當初骰出的同一份菜單重選，再重問宣告
+      if (ans && ans.rechoose) {
+        const e = battle.entities.find(function (x) { return x.id === ans.rechoose.entityId; });
+        const drawn = e && (e.drawnSkills || []).find(function (d) { return d.slotIndex === ans.rechoose.slotIndex; });
+        if (e && drawn && (drawn.menuOptions || []).length > 1) {
+          const picked = yield {
+            type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: drawn.slotIndex,
+            options: drawn.menuOptions, dice: drawn.dice || [], isRedo: true
+          };
+          if (picked && picked !== drawn.skillId) {
+            const oldSk = findSkill(e, drawn.skillId), newSk = findSkill(e, picked);
+            drawn.skillId = picked;
+            events.push("↺ " + e.name + " 第 " + (drawn.slotIndex + 1) + " 槽改用技能：《" +
+              (oldSk ? oldSk.name : "?") + "》→《" + (newSk ? newSk.name : picked) + "》");
+          }
+          yield* askDeclare(battle, e, drawn, true, events);   // 技能換了，宣告一併重設
+        }
+        continue;
+      }
+
+      // ［改宣告］只重問動作與目標
+      if (ans && ans.redeclare) {
+        const e = battle.entities.find(function (x) { return x.id === ans.redeclare.entityId; });
+        const drawn = e && (e.drawnSkills || []).find(function (d) { return d.slotIndex === ans.redeclare.slotIndex; });
+        if (e && drawn) yield* askDeclare(battle, e, drawn, true, events);
+        continue;
+      }
+
+      finalEntries = (ans && ans.entries) ? ans.entries : pairing.entries;
+      break;
+    }
+    // 確認之後才把攔截判定寫進事件紀錄（預覽階段反覆重算，不該汙染 log）
+    lastNotes.forEach(function (n) { events.push((n.ok ? "" : "⚠ ") + n.text); });
 
     // 階段三～五：依有效 DEX 序列結算
     events.push("【階段三～五】依有效 DEX 序列結算拚點、傷害與狀態觸發");

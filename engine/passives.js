@@ -11,6 +11,7 @@
 // 一個被動的形狀：
 //   {
 //     id, name,
+//     text,                         // ★ 被動文本：角卡原文，桌邊查詢用（顯示在角色詳情浮窗）
 //     kind: "buff" | "cost",        // 階段一排序用：先結算 buff，再結算 cost
 //     allowsInterceptingPlayers,    // （選用）非 PC 方可攔截打向玩家的攻擊（§9 例外）
 //     onTurnStart(ctx),             // 階段一 step5
@@ -128,6 +129,7 @@
   Passives.register({
     id: "demo_focus_regen",
     name: "示範：凝氣",
+    text: "每回合開始時，自身回復 focusRegen 點專注力（預設 3）。",
     kind: "buff",
     onTurnStart: function (ctx) {
       const amount = ctx.tuning.focusRegen || 3;
@@ -141,6 +143,8 @@
   Passives.register({
     id: "demo_resource_spend",
     name: "示範：門檻兌換",
+    text: "每回合開始時，若自訂資源達到 threshold，將其歸零並解鎖特殊技能。" +
+      "屬「消耗資源」類 → 階段一一定在所有「給予增益」類被動之後才結算。",
     kind: "cost",
     onTurnStart: function (ctx) {
       const key = ctx.tuning.resourceKey || "資源";
@@ -158,6 +162,8 @@
   Passives.register({
     id: "demo_intercept_override",
     name: "示範：守護者本能",
+    text: "此角色可以攔截「打向玩家」的攻擊 —— 規則 §9「敵方不能攔截玩家」的例外。" +
+      "仍須符合攔截資格（有效 DEX 嚴格大於被攔技能當前目標）。",
     kind: "buff",
     allowsInterceptingPlayers: true
   });
@@ -167,6 +173,9 @@
   Passives.register({
     id: "demo_ally_tremor_support",
     name: "示範：援護射擊",
+    text: "隊友觸發【震顫爆發】時，自動消耗 supportShotCost 點彈藥發射一次技能A。" +
+      "⚠ 每回合上限 supportShotsPerTurn 次 —— 因為這個被動玩家無法拒絕（隊友的高光回合會吃掉我的子彈），" +
+      "依 character-design skill 屬「玩家沒有選擇」類型，必須設次數上限。",
     kind: "buff",
     onAllyTremorBurst: function (ctx) {
       const max = ctx.tuning.supportShotsPerTurn || 1;

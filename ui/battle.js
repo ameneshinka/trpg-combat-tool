@@ -211,11 +211,23 @@
       const rTarget = row([el("span", { text: "目標／對手：" }), targetSel]);
       const rProtect = row([el("span", { text: "保護誰：" }), protectSel]);
       rProtect.style.display = "none";
-      actionSel.onchange = function () {
+      function syncIntercept() {
         const ic = actionSel.value === "intercept";
         rProtect.style.display = ic ? "flex" : "none";
         rTarget.querySelector("span").textContent = ic ? "攔誰的攻擊：" : "目標／對手：";
-      };
+      }
+      actionSel.onchange = syncIntercept;
+
+      // 重新宣告時把上次的選擇帶回來，KP 只要改要改的那一項
+      if (req.isRedo) {
+        box.insertBefore(el("p", { cls: "hint warn-text", text: "↺ 重新宣告這個槽位（原本的宣告已清除）" }), box.firstChild.nextSibling);
+        if (req.previous) {
+          if (req.previous.action) actionSel.value = req.previous.action;
+          if (req.previous.targetId) targetSel.value = req.previous.targetId;
+          if (req.previous.protectId) protectSel.value = req.previous.protectId;
+        }
+      }
+      syncIntercept();
 
       box.appendChild(row([el("span", { text: "動作：" }), actionSel]));
       box.appendChild(rTarget);
@@ -233,27 +245,91 @@
     }
 
     if (req.type === "confirmPairing") {
-      box.appendChild(el("h4", { text: "KP 確認最終配對" }));
+      box.appendChild(el("h4", { text: "KP 確認本回合行動" }));
+      box.appendChild(el("p", { cls: "hint", text: "確認前可以改任何一個槽位的宣告或技能；改完會立刻重算配對與攔截判定。" }));
+
+      // ---- 行動一覽（依有效 DEX 序列）----
+      const board = req.board || [];
+      const boardBox = el("div", { cls: "action-board" });
+      if (!board.length) boardBox.appendChild(el("p", { cls: "hint", text: "（本回合沒有人能行動）" }));
+      board.forEach(function (r) {
+        const row = el("div", { cls: "board-row" });
+
+        const who = el("div", { cls: "br-who" });
+        who.appendChild(el("span", { cls: "badge " + (r.isPC ? "pc" : "npc"), text: r.isPC ? "PC" : "NPC" }));
+        who.appendChild(el("span", { cls: "br-name", text: r.entityName }));
+        who.appendChild(el("span", { cls: "hint", text: "DEX " + r.dex.toFixed(1) + "　第 " + (r.slotIndex + 1) + " 槽" }));
+        row.appendChild(who);
+
+        const what = el("div", { cls: "br-what" });
+        const skTag = el("span", { cls: "br-skill", text: "《" + r.skillName + "》" });
+        what.appendChild(skTag);
+        if (r.isGuard) what.appendChild(el("span", { cls: "tag order", text: "防守" }));
+        if (r.isDodge) what.appendChild(el("span", { cls: "tag order", text: "閃躲" }));
+        if (r.dice && r.dice.length) what.appendChild(el("span", { cls: "hint", text: "1d6=" + r.dice.join("／") }));
+        const actionText = r.action === "attack" ? "攻擊 → " + (r.targetName || "?")
+          : r.action === "intercept" ? "攔截 " + (r.targetName || "?") + " 的攻擊（保護 " + (r.protectName || "?") + "）"
+          : r.action === "defend" ? "防禦／應對 " + (r.targetName || "?")
+          : "（尚未宣告）";
+        what.appendChild(el("span", { cls: "br-action", text: actionText }));
+        row.appendChild(what);
+
+        const ops = el("div", { cls: "br-ops" });
+        const reBtn = el("button", { text: "改宣告" });
+        reBtn.type = "button";
+        reBtn.setAttribute("aria-label", "重新宣告 " + r.entityName + " 第 " + (r.slotIndex + 1) + " 槽");
+        reBtn.onclick = function () { submit({ redeclare: { entityId: r.entityId, slotIndex: r.slotIndex } }); };
+        ops.appendChild(reBtn);
+        if (r.canRechoose) {
+          const skBtn = el("button", { text: "改技能" });
+          skBtn.type = "button";
+          skBtn.setAttribute("aria-label", "重新選擇 " + r.entityName + " 第 " + (r.slotIndex + 1) + " 槽的技能");
+          skBtn.title = "用當初骰出的同一份菜單重新選（骰值不變）";
+          skBtn.onclick = function () { submit({ rechoose: { entityId: r.entityId, slotIndex: r.slotIndex } }); };
+          ops.appendChild(skBtn);
+        } else {
+          ops.appendChild(el("span", { cls: "hint", text: "被迫單選" }));
+        }
+        row.appendChild(ops);
+        boardBox.appendChild(row);
+      });
+      box.appendChild(boardBox);
+
+      // ---- 攔截判定結果 ----
+      if ((req.notes || []).length) {
+        box.appendChild(el("div", { cls: "sub-label", text: "攔截判定" }));
+        req.notes.forEach(function (n) {
+          box.appendChild(el("p", { cls: "hint" + (n.ok ? "" : " warn-text"), text: (n.ok ? "✓ " : "✗ ") + n.text }));
+        });
+      }
+
+      // ---- 衍生出的配對（可個別移除）----
       const entries = req.proposed.map(function (e) { return Object.assign({}, e); });
+      box.appendChild(el("div", { cls: "sub-label", text: "將要結算的配對" }));
       const list = el("div");
-      if (!entries.length) list.appendChild(el("p", { cls: "hint", text: "（本回合沒有任何行動）" }));
-      entries.forEach(function (en, i) {
+      if (!entries.length) list.appendChild(el("p", { cls: "hint", text: "（沒有任何要結算的行動）" }));
+      entries.forEach(function (en) {
         const a = byId(en.aEntityId), b2 = en.bEntityId ? byId(en.bEntityId) : null;
         const t = en.targetId ? byId(en.targetId) : null;
         let text;
         if (en.kind === "clash") text = a.name + "《" + skName(a, en.aSkillId) + "》 ⚔ " + b2.name + "《" + skName(b2, en.bSkillId) + "》";
-        else if (en.kind === "unilateral") text = a.name + "《" + skName(a, en.aSkillId) + "》 → " + (t ? t.name : "?") + "（單方面攻擊）";
+        else if (en.kind === "unilateral") text = a.name + "《" + skName(a, en.aSkillId) + "》 → " + (t ? t.name : "?") + "（單方面攻擊，無人抵擋）";
         else text = a.name + "《" + skName(a, en.aSkillId) + "》（無對手的防禦技）";
         const rowEl = el("div", { cls: "pair-block" });
         rowEl.appendChild(el("span", { text: text }));
         const rm = el("button", { cls: "danger", text: "移除" });
         rm.type = "button";
-        rm.onclick = function () { en._removed = true; rowEl.style.opacity = "0.35"; rm.disabled = true; };
+        rm.onclick = function () {
+          en._removed = !en._removed;
+          rowEl.style.opacity = en._removed ? "0.35" : "";
+          rm.textContent = en._removed ? "已移除（點此復原）" : "移除";
+        };
         rowEl.appendChild(rm);
         list.appendChild(rowEl);
       });
       box.appendChild(list);
-      const b = el("button", { cls: "primary", text: "確認配對，進入結算" });
+
+      const b = el("button", { cls: "primary", text: "確認，進入結算" });
       b.type = "button";
       b.onclick = function () {
         submit({ entries: entries.filter(function (e) { return !e._removed; }) });

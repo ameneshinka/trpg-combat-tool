@@ -215,14 +215,23 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    // 名單摘要
+    // 名單摘要（可點擊 → 開戰前就能查角色的技能與被動文本）
     const list = $("#rosterPreview");
     global.Characters.roster().forEach(function (e) {
-      list.appendChild(el("div", {
+      const line = el("div", {
         cls: "roster-line",
         text: (e.isPC ? "【PC】" : "【NPC】") + e.name + "　HP " + e.maxHp + "　DEX " + e.dex +
-          "　技能 " + e.skillLibrary.length + " 個"
-      }));
+          "　技能 " + e.skillLibrary.length + " 個　▸ 點擊查看文本"
+      });
+      line.setAttribute("role", "button");
+      line.setAttribute("tabindex", "0");
+      line.setAttribute("aria-label", "查看 " + e.name + " 的角色詳情");
+      function openIt() { global.Detail.open(e, { kpControls: false }); }
+      line.addEventListener("click", openIt);
+      line.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openIt(); }
+      });
+      list.appendChild(line);
     });
     const pcs = global.Characters.PC_TEMPLATES.filter(function (t) { return !t.skillLibrary || !t.skillLibrary.length; });
     if (pcs.length) {
