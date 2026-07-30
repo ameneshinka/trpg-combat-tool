@@ -418,6 +418,56 @@
       eq(board[0].dice, [1, 4], "帶出當初骰值供 KP 核對");
     }
 
+    section("確認板：改技能含防禦技、新增／刪除行動的槽位帳");
+    {
+      const e = mkEntity({ id: "p1", name: "測試PC", isPC: true, dex: 10, canAct: true, slots: 3 });
+      const a1 = mkSkill({ id: "a1", name: "招一", coins: ["normal"] });
+      const a2 = mkSkill({ id: "a2", name: "招二", coins: ["normal"] });
+      const guard = mkSkill({ id: "guard", name: "防守", type: "defense", isGuard: true, coins: ["normal"] });
+      const dodge = mkSkill({ id: "dodge", name: "閃躲", type: "defense", isDodge: true, coins: ["normal"] });
+      e.skillLibrary = [a1, a2, guard, dodge];
+
+      // 被迫單選的槽位，依舊可以改成防禦技（規則：防禦技不受抽選限制）
+      const forced = { slotIndex: 0, skillId: "a1", menuOptions: [{ id: "a1", name: "招一" }], dice: [1, 2] };
+      const opts = T.rechooseOptions(e, forced);
+      eq(opts.map(function (o) { return o.id; }), ["a1", "guard", "dodge"],
+        "改技能的選項 = 骰出的菜單 ＋ 全部防禦技");
+      eq(opts.length > 1, true, "即使當初被迫單選，仍有東西可改（可改成防禦技）");
+      eq(/防禦技/.test(opts[1].name), true, "防禦技選項有標註不受抽選限制");
+
+      // 槽位帳：3 槽、已用 1 → 還能新增 2 個行動
+      e.drawnSkills = [forced];
+      const battle = { entities: [e], turnOrder: [e] };
+      let usage = T.slotUsage(battle);
+      eq([usage[0].slots, usage[0].used, usage[0].free], [3, 1, 2], "槽位帳：3 槽已用 1 → 剩 2");
+      eq(usage[0].hasDefenseSkill, true, "有防禦技可用於新增行動");
+      eq(T.nextFreeSlotIndex(e), 1, "下一個空閒槽位編號 = 1");
+
+      // 用滿槽位 → 不能再新增
+      e.drawnSkills.push({ slotIndex: 1, skillId: "guard", menuOptions: [], dice: [] });
+      e.drawnSkills.push({ slotIndex: 2, skillId: "dodge", menuOptions: [], dice: [] });
+      usage = T.slotUsage(battle);
+      eq(usage[0].free, 0, "3 槽全用完 → 剩 0");
+      eq(T.nextFreeSlotIndex(e), null, "沒有空閒槽位 → 回 null（引擎會擋下新增）");
+
+      // 刪掉中間那個 → 該槽位變回空閒且可被重新指派
+      e.drawnSkills = e.drawnSkills.filter(function (d) { return d.slotIndex !== 1; });
+      eq(T.nextFreeSlotIndex(e), 1, "刪除第 2 槽後，該槽位回到空閒");
+      eq(T.slotUsage(battle)[0].free, 1, "槽位帳同步變成剩 1");
+
+      // board 的 canRechoose 用新邏輯（含防禦技）→ 被迫單選也能改
+      const board = T.buildDeclarationBoard(battle);
+      eq(board.find(function (r) { return r.slotIndex === 0; }).canRechoose, true,
+        "被迫單選的槽位 canRechoose 仍為 true（可改成防禦技）");
+
+      // 沒有防禦技的角色不會被誤導可以新增
+      const bare = mkEntity({ id: "bare", name: "無防禦技", canAct: true, slots: 2 });
+      bare.skillLibrary = [a1];
+      bare.drawnSkills = [{ slotIndex: 0, skillId: "a1", menuOptions: [], dice: [] }];
+      const u2 = T.slotUsage({ entities: [bare], turnOrder: [bare] })[0];
+      eq([u2.free, u2.hasDefenseSkill], [1, false], "有空槽但沒防禦技 → hasDefenseSkill=false");
+    }
+
     section("攔截資格：有效 DEX 嚴格大於");
     {
       const guard = mkEntity({ id: "g", name: "護衛", isPC: true, dex: 15 });

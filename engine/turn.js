@@ -566,8 +566,53 @@
   }
 
   /**
+   * 「改技能」可選的清單。
+   * ＝ 當初骰出的菜單 ＋ 所有防禦型技能。
+   * 依規則（lifecycle.md / authoring.md）：【防守】【閃躲】不受抽選限制、想用就能用，
+   * 所以任何一個槽位都可以改成用防禦技 —— 這正是 KP 訂正錯誤宣告最常需要的路徑。
+   */
+  function rechooseOptions(entity, drawn) {
+    const opts = (drawn.menuOptions || []).map(function (o) { return { id: o.id, name: o.name }; });
+    defenseSkills(entity).forEach(function (sk) {
+      if (!opts.some(function (o) { return o.id === sk.id; })) {
+        opts.push({ id: sk.id, name: sk.name + "（防禦技・不受抽選限制）" });
+      }
+    });
+    return opts;
+  }
+  Turn.rechooseOptions = rechooseOptions;
+
+  // 還沒被任何槽位使用的最小槽位編號（新增行動時用）
+  function nextFreeSlotIndex(entity) {
+    const used = (entity.drawnSkills || []).map(function (d) { return d.slotIndex; });
+    for (let i = 0; i < (entity.slots || 0); i++) {
+      if (used.indexOf(i) === -1) return i;
+    }
+    return null;
+  }
+  Turn.nextFreeSlotIndex = nextFreeSlotIndex;
+
+  /**
+   * 每個可行動者的槽位使用狀況 —— 供確認畫面顯示「還能不能新增行動」。
+   * 槽位是硬上限：一個槽位＝一次行動，防禦技也佔一個槽位。
+   */
+  function slotUsage(battle) {
+    return (battle.turnOrder || battle.entities)
+      .filter(function (e) { return e.canAct && e.hp > 0; })
+      .map(function (e) {
+        const used = (e.drawnSkills || []).length;
+        return {
+          entityId: e.id, entityName: e.name, isPC: !!e.isPC,
+          slots: e.slots || 0, used: used, free: Math.max(0, (e.slots || 0) - used),
+          hasDefenseSkill: defenseSkills(e).length > 0
+        };
+      });
+  }
+  Turn.slotUsage = slotUsage;
+
+  /**
    * 供 KP 確認畫面用的「行動一覽」：依 DEX 序列列出每個 actor 的每個槽位與其宣告。
-   * canRechoose = 當初骰出的菜單有 2 個選項才可以改技能（被迫單選的沒得改）。
+   * canRechoose = 改技能的可選項多於 1 個（含防禦技，所以幾乎總是可以訂正）。
    */
   function buildDeclarationBoard(battle) {
     const byId = {};
@@ -592,7 +637,7 @@
           targetName: tgt ? tgt.name : null,
           protectId: d ? d.protectId : null,
           protectName: pro ? pro.name : null,
-          canRechoose: (drawn.menuOptions || []).length > 1,
+          canRechoose: rechooseOptions(e, drawn).length > 1,
           dice: drawn.dice || []
         });
       });
@@ -632,25 +677,71 @@
         type: "confirmPairing",
         proposed: pairing.entries,
         notes: pairing.notes,
-        board: buildDeclarationBoard(battle)
+        board: buildDeclarationBoard(battle),
+        slotUsage: slotUsage(battle)
       };
 
-      // ［改技能］先用當初骰出的同一份菜單重選，再重問宣告
+      // ［改技能］可選：當初骰出的菜單 ＋ 防禦技（不受抽選限制）→ 換完重問宣告
       if (ans && ans.rechoose) {
         const e = battle.entities.find(function (x) { return x.id === ans.rechoose.entityId; });
         const drawn = e && (e.drawnSkills || []).find(function (d) { return d.slotIndex === ans.rechoose.slotIndex; });
-        if (e && drawn && (drawn.menuOptions || []).length > 1) {
-          const picked = yield {
-            type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: drawn.slotIndex,
-            options: drawn.menuOptions, dice: drawn.dice || [], isRedo: true
-          };
-          if (picked && picked !== drawn.skillId) {
-            const oldSk = findSkill(e, drawn.skillId), newSk = findSkill(e, picked);
-            drawn.skillId = picked;
-            events.push("↺ " + e.name + " 第 " + (drawn.slotIndex + 1) + " 槽改用技能：《" +
-              (oldSk ? oldSk.name : "?") + "》→《" + (newSk ? newSk.name : picked) + "》");
+        if (e && drawn) {
+          const options = rechooseOptions(e, drawn);
+          if (options.length > 1) {
+            const picked = yield {
+              type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: drawn.slotIndex,
+              options: options, dice: drawn.dice || [], isRedo: true
+            };
+            if (picked && picked !== drawn.skillId) {
+              const oldSk = findSkill(e, drawn.skillId), newSk = findSkill(e, picked);
+              drawn.skillId = picked;
+              events.push("↺ " + e.name + " 第 " + (drawn.slotIndex + 1) + " 槽改用技能：《" +
+                (oldSk ? oldSk.name : "?") + "》→《" + (newSk ? newSk.name : picked) + "》");
+            }
+            yield* askDeclare(battle, e, drawn, true, events);   // 技能換了，宣告一併重設
           }
-          yield* askDeclare(battle, e, drawn, true, events);   // 技能換了，宣告一併重設
+        }
+        continue;
+      }
+
+      // ［＋新增行動］用一個空閒槽位打出防禦技（規則：防禦技不受抽選限制、想用就能用）
+      if (ans && ans.addAction) {
+        const e = battle.entities.find(function (x) { return x.id === ans.addAction.entityId; });
+        if (e) {
+          const idx = nextFreeSlotIndex(e);
+          const defs = defenseSkills(e).map(function (sk) { return { id: sk.id, name: sk.name }; });
+          if (idx === null) {
+            events.push("⚠ " + e.name + " 沒有空閒槽位（共 " + (e.slots || 0) + " 槽、已用 " +
+              (e.drawnSkills || []).length + "），無法新增行動");
+          } else if (!defs.length) {
+            events.push("⚠ " + e.name + " 沒有防禦型技能可用於新增行動");
+          } else {
+            const picked = yield {
+              type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: idx,
+              options: defs, dice: [], isAdd: true
+            };
+            const sk = findSkill(e, picked);
+            const drawn = { slotIndex: idx, skillId: picked, menuOptions: defs, dice: [] };
+            e.drawnSkills.push(drawn);
+            events.push("＋ " + e.name + " 新增行動：第 " + (idx + 1) + " 槽使用《" +
+              (sk ? sk.name : picked) + "》（防禦技不受抽選限制）");
+            yield* askDeclare(battle, e, drawn, false, events);
+          }
+        }
+        continue;
+      }
+
+      // ［刪除此行動］把該槽位的宣告與抽到的技能一起清掉，讓它變回空閒槽位可重新新增
+      if (ans && ans.removeAction) {
+        const e = battle.entities.find(function (x) { return x.id === ans.removeAction.entityId; });
+        if (e) {
+          const si = ans.removeAction.slotIndex;
+          const drawn = (e.drawnSkills || []).find(function (d) { return d.slotIndex === si; });
+          const sk = drawn && findSkill(e, drawn.skillId);
+          e.drawnSkills = (e.drawnSkills || []).filter(function (d) { return d.slotIndex !== si; });
+          e.declarations = (e.declarations || []).filter(function (d) { return d.slotIndex !== si; });
+          events.push("－ " + e.name + " 刪除第 " + (si + 1) + " 槽的行動" +
+            (sk ? "（原本是《" + sk.name + "》）" : "") + "，該槽位可重新新增");
         }
         continue;
       }

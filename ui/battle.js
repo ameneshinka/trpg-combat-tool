@@ -24,7 +24,7 @@
     skillDraw1d6: "階段一・回合開始 — 技能抽選（手動輸入 1d6 兩次）",
     chooseSkill: "階段一・回合開始 — 從菜單選一個技能",
     declare: "階段二・宣告與配對",
-    confirmPairing: "階段二・KP 確認最終配對",
+    confirmPairing: "階段二・KP 確認本回合行動（可改宣告／改技能／新增／刪除）",
     damageMultiplier: "階段四・傷害乘數骰（整把技能共用）",
     concentration1d20: "階段四・凝神判定（1d20）"
   };
@@ -174,8 +174,17 @@
     }
 
     if (req.type === "chooseSkill") {
-      box.appendChild(el("h4", { text: req.name + "　第 " + (req.slotIndex + 1) + " 槽 — 選一個技能" }));
-      box.appendChild(el("p", { cls: "hint", text: "1d6 骰出 " + req.dice.join(" 與 ") + "，指向以下技能：" }));
+      const title = req.isAdd ? "　第 " + (req.slotIndex + 1) + " 槽 — 新增行動：選一個防禦技"
+        : req.isRedo ? "　第 " + (req.slotIndex + 1) + " 槽 — 改用哪個技能"
+        : "　第 " + (req.slotIndex + 1) + " 槽 — 選一個技能";
+      box.appendChild(el("h4", { text: req.name + title }));
+      if (req.isAdd) {
+        box.appendChild(el("p", { cls: "hint", text: "使用一個空閒槽位。【防守】【閃躲】不受 1d6 抽選限制，想用就能用（各佔一槽，同回合可多次）。" }));
+      } else if (req.isRedo) {
+        box.appendChild(el("p", { cls: "hint", text: "可選：當初 1d6 骰出的菜單" + ((req.dice || []).length ? "（" + req.dice.join(" 與 ") + "）" : "") + "，加上不受抽選限制的防禦技。" }));
+      } else {
+        box.appendChild(el("p", { cls: "hint", text: "1d6 骰出 " + req.dice.join(" 與 ") + "，指向以下技能：" }));
+      }
       const r = el("div", { cls: "row" });
       req.options.forEach(function (o) {
         const b = el("button", { text: o.name });
@@ -199,35 +208,70 @@
         : [["attack", "攻擊"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]];
       acts.forEach(function (a) { const o = el("option", { text: a[1] }); o.value = a[0]; actionSel.appendChild(o); });
 
+      const self = battle.entities.find(function (x) { return x.id === req.entityId; });
       const alive = battle.entities.filter(function (x) { return x.hp > 0; });
+      const enemies = alive.filter(function (x) { return self && x.isPC !== self.isPC; });
+      const allies = alive.filter(function (x) { return self && x.isPC === self.isPC && x.id !== self.id; });
+
       const targetSel = el("select"); targetSel.setAttribute("aria-label", "目標");
-      alive.forEach(function (x) {
-        const o = el("option", { text: x.name + (x.isPC ? "（PC）" : "（NPC）") + " DEX " + S.effectiveDex(x).toFixed(1) });
-        o.value = x.id; targetSel.appendChild(o);
-      });
       const protectSel = el("select"); protectSel.setAttribute("aria-label", "保護對象");
-      alive.forEach(function (x) { const o = el("option", { text: x.name }); o.value = x.id; protectSel.appendChild(o); });
+      // 攔截是「把隊友被打的攻擊搶過來」→ 保護對象只列隊友（沒有隊友就列自己以免空選單）
+      (allies.length ? allies : [self]).forEach(function (x) {
+        if (!x) return;
+        const o = el("option", { text: x.name }); o.value = x.id; protectSel.appendChild(o);
+      });
 
       const rTarget = row([el("span", { text: "目標／對手：" }), targetSel]);
       const rProtect = row([el("span", { text: "保護誰：" }), protectSel]);
       rProtect.style.display = "none";
-      function syncIntercept() {
-        const ic = actionSel.value === "intercept";
+
+      /**
+       * 目標選單依動作重建 —— 三種動作的「目標」語意完全不同：
+       *   attack    → 我要打誰（預設敵方）
+       *   intercept → 我要攔誰的攻擊（預設敵方）
+       *   defend    → 我要應對誰的攻擊；預設「任何攻擊我的人」（值為空字串），
+       *               對應引擎 buildPairing 的 !decl.targetId 分支 → 誰打我都能擋。
+       *               若預設成自己，配對會失敗、防禦技變成「無對手」——這是實測抓到的坑。
+       */
+      function syncTargetOptions(keepValue) {
+        const act = actionSel.value;
+        const prevVal = keepValue !== undefined ? keepValue : targetSel.value;
+        targetSel.innerHTML = "";
+        if (act === "defend") {
+          const anyOpt = el("option", { text: "（任何攻擊我的人）" });
+          anyOpt.value = ""; targetSel.appendChild(anyOpt);
+        }
+        const list = (act === "attack" || act === "intercept")
+          ? enemies.concat(alive.filter(function (x) { return enemies.indexOf(x) === -1; }))
+          : alive;
+        list.forEach(function (x) {
+          const o = el("option", {
+            text: x.name + (x.isPC ? "（PC）" : "（NPC）") + " DEX " + S.effectiveDex(x).toFixed(1)
+          });
+          o.value = x.id; targetSel.appendChild(o);
+        });
+        if (prevVal !== undefined && prevVal !== null &&
+            Array.prototype.some.call(targetSel.options, function (o) { return o.value === prevVal; })) {
+          targetSel.value = prevVal;
+        }
+        const ic = act === "intercept";
         rProtect.style.display = ic ? "flex" : "none";
-        rTarget.querySelector("span").textContent = ic ? "攔誰的攻擊：" : "目標／對手：";
+        rTarget.querySelector("span").textContent = ic ? "攔誰的攻擊：" :
+          act === "defend" ? "應對誰的攻擊：" : "目標／對手：";
       }
-      actionSel.onchange = syncIntercept;
+      actionSel.onchange = function () { syncTargetOptions(); };
 
       // 重新宣告時把上次的選擇帶回來，KP 只要改要改的那一項
+      let restoreTarget;
       if (req.isRedo) {
         box.insertBefore(el("p", { cls: "hint warn-text", text: "↺ 重新宣告這個槽位（原本的宣告已清除）" }), box.firstChild.nextSibling);
         if (req.previous) {
           if (req.previous.action) actionSel.value = req.previous.action;
-          if (req.previous.targetId) targetSel.value = req.previous.targetId;
           if (req.previous.protectId) protectSel.value = req.previous.protectId;
+          restoreTarget = req.previous.targetId;
         }
       }
-      syncIntercept();
+      syncTargetOptions(restoreTarget);
 
       box.appendChild(row([el("span", { text: "動作：" }), actionSel]));
       box.appendChild(rTarget);
@@ -284,16 +328,42 @@
           const skBtn = el("button", { text: "改技能" });
           skBtn.type = "button";
           skBtn.setAttribute("aria-label", "重新選擇 " + r.entityName + " 第 " + (r.slotIndex + 1) + " 槽的技能");
-          skBtn.title = "用當初骰出的同一份菜單重新選（骰值不變）";
+          skBtn.title = "可選：當初骰出的菜單 ＋ 防禦技（防守／閃躲不受抽選限制）";
           skBtn.onclick = function () { submit({ rechoose: { entityId: r.entityId, slotIndex: r.slotIndex } }); };
           ops.appendChild(skBtn);
-        } else {
-          ops.appendChild(el("span", { cls: "hint", text: "被迫單選" }));
         }
+        const delBtn = el("button", { cls: "danger", text: "刪除" });
+        delBtn.type = "button";
+        delBtn.setAttribute("aria-label", "刪除 " + r.entityName + " 第 " + (r.slotIndex + 1) + " 槽的行動");
+        delBtn.title = "整筆清掉，該槽位變回空閒 → 可用下方「新增行動」重新指定";
+        delBtn.onclick = function () { submit({ removeAction: { entityId: r.entityId, slotIndex: r.slotIndex } }); };
+        ops.appendChild(delBtn);
         row.appendChild(ops);
         boardBox.appendChild(row);
       });
       box.appendChild(boardBox);
+
+      // ---- 新增行動（用空閒槽位打防禦技）----
+      const usage = req.slotUsage || [];
+      const addable = usage.filter(function (u) { return u.free > 0 && u.hasDefenseSkill; });
+      const usageLine = usage.map(function (u) {
+        return u.entityName + " " + u.used + "/" + u.slots + " 槽";
+      }).join("　│　");
+      if (usage.length) box.appendChild(el("p", { cls: "hint", text: "槽位使用狀況：" + usageLine }));
+      if (addable.length) {
+        box.appendChild(el("div", { cls: "sub-label", text: "新增行動（防禦技不受抽選限制，想用就能用）" }));
+        const addRow = el("div", { cls: "row" });
+        addable.forEach(function (u) {
+          const b2 = el("button", { text: "＋ " + u.entityName + "（剩 " + u.free + " 槽）" });
+          b2.type = "button";
+          b2.setAttribute("aria-label", "為 " + u.entityName + " 新增一個行動");
+          b2.onclick = function () { submit({ addAction: { entityId: u.entityId } }); };
+          addRow.appendChild(b2);
+        });
+        box.appendChild(addRow);
+      } else if (usage.length) {
+        box.appendChild(el("p", { cls: "hint", text: "（所有人的槽位都已用完 —— 想換內容請用上方的「改技能／改宣告」，或先「刪除」再新增）" }));
+      }
 
       // ---- 攔截判定結果 ----
       if ((req.notes || []).length) {
