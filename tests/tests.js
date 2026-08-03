@@ -627,8 +627,8 @@
       // --- 獨立性：巢狀物件最容易被淺拷貝穿透，逐一驗 ---
       const a = three[0], b = three[1];
       a.hp = 5; a.tempHp = 12; a.focus = -20; a.slots = 3;
-      S.apply(a, "失血", { layer: 2, level: 1 }, []);
-      S.apply(a, "自訂印記", { layer: 1, isMark: true }, []);
+      S.apply(a, "失血", 2, 1);
+      S.apply(a, "自訂印記", 1, 0);
       a.resources["蠻力"] = 7;
       a.skillLibrary[0].basePower = 999;
       a.slotMap.A = "gg_pierce";
@@ -733,6 +733,191 @@
       gob.forEach(function (e) { e.declarations = []; });
       const r2 = runGen(T.askBatchTarget(battle, []), [{ targetId: pc.id }]);
       eq(r2.asked.length, 0, "只剩一個攻擊行動（另一個是防守）→ 不問一鍵指定");
+    }
+
+    // ============================================================
+    // 效果鉤子引擎（engine/effects.js）
+    // ============================================================
+    const E = global.Effects;
+    function fxOpts(sk, extra) {
+      return Object.assign({
+        rng: ALWAYS_HEAD, damageMultiplier: 1,
+        fx: { skill: sk, battle: null, runtime: E.makeRuntime() }
+      }, extra || {});
+    }
+
+    section("效果鉤子：逐枚硬幣的觸發順序");
+    {
+      const order = [];
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 0, coinPower: 5,
+        coinEffects: [{
+          onUse: function () { order.push("onUse"); },
+          onHead: function () { order.push("onHead"); },
+          onHit: function () { order.push("onHit"); },
+          afterHit: function () { order.push("afterHit"); }
+        }]
+      });
+      const atk = mkEntity({ name: "攻方" }), tgt = mkEntity({ name: "目標" });
+      runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 0, 5, "測試", fxOpts(sk)));
+      eq(order, ["onUse", "onHead", "onHit", "afterHit"], "順序＝使用時→正面時→命中時→命中後");
+    }
+
+    section("效果鉤子：反面照樣算命中，但不觸發 [硬幣正面時]");
+    {
+      const order = [];
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 0, coinPower: 5,
+        coinEffects: [{
+          onHead: function () { order.push("onHead"); },
+          onHit: function () { order.push("onHit"); }
+        }]
+      });
+      const atk = mkEntity(), tgt = mkEntity({ name: "目標" });
+      runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 0, 5, "測試",
+        fxOpts(sk, { rng: ALWAYS_TAIL })));
+      eq(order, ["onHit"], "反面：onHead 不跑，onHit 照跑（裁決 33）");
+    }
+
+    section("效果鉤子：[硬幣正面時] 排在凝神判定之後");
+    {
+      // 這枚剛上的凝神，這枚自己吃不到（裁決 14：給後續的重用吃）
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 0, coinPower: 5,
+        coinEffects: [{
+          onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 6); }
+        }]
+      });
+      const atk = mkEntity({ name: "攻方" }), tgt = mkEntity({ name: "目標" });
+      const r = runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 0, 5, "測試", fxOpts(sk)));
+      const asked = r.asked.map(function (q) { return q.type; });
+      eq(asked.indexOf("concentration1d20"), -1, "判定時凝神仍是 0 級 → 不問 1d20（這枚吃不到）");
+      eq([S.layerOf(atk, "凝神"), S.levelOf(atk, "凝神")], [1, 6], "凝神確實有上，只是留給後續");
+    }
+
+    section("效果鉤子：coinEffects 依「原始硬幣位置」索引");
+    {
+      // 第一枚損失後，可擲序的第 0 枚其實是原始的第 1 枚 —— 效果不可以錯位
+      const seen = [];
+      const sk = mkSkill({
+        coins: ["normal", "normal", "normal"], basePower: 0, coinPower: 1,
+        coinEffects: [
+          { onHit: function () { seen.push(0); } },
+          { onHit: function () { seen.push(1); } },
+          { onHit: function () { seen.push(2); } }
+        ]
+      });
+      const rt = C.makeCoinRuntime(sk);
+      rt[0].status = C.LOST;                       // 第一枚已損失
+      const atk = mkEntity(), tgt = mkEntity({ name: "目標" });
+      runGen(D.resolveDamage(atk, tgt, rt, 0, 1, "測試", fxOpts(sk)));
+      eq(seen, [1, 2], "跳過損失的第 0 枚，跑的是原始索引 1 與 2（不是 0 與 1）");
+    }
+
+    section("效果鉤子：ctx.stop() 中止後續硬幣（威爾的子彈不足）");
+    {
+      const seen = [];
+      const sk = mkSkill({
+        coins: ["normal", "normal", "normal"], basePower: 0, coinPower: 1,
+        coinEffects: [
+          { onUse: function () { seen.push(0); } },
+          { onUse: function (ctx) { seen.push(1); ctx.stop("資源不足，停止傷害結算"); } },
+          { onUse: function () { seen.push(2); } }
+        ]
+      });
+      const atk = mkEntity(), tgt = mkEntity({ name: "目標" });
+      const res = runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 0, 1, "測試", fxOpts(sk))).value;
+      eq(seen, [0, 1], "第 2 枚要求中止 → 第 3 枚的 onUse 不跑");
+      eq(res.hits.length, 1, "只有第 1 枚真的打出去（中止的那枚不結算傷害）");
+    }
+
+    section("效果鉤子：技能層級 [使用時] 的威力修正吃得到拚點");
+    {
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 5, coinPower: 5,
+        onUse: function (ctx) { ctx.runtime.basePowerBonus = 4; ctx.runtime.coinPowerBonus = 3; }
+      });
+      const e = mkEntity({ name: "使用者" });
+      const use = runGen(T.beginSkillUse(e, sk, null, null, [])).value;
+      eq([use.basePower, use.coinPower], [9, 8], "基威 5+4、幣威 5+3 —— 拚點與傷害都用這組");
+    }
+
+    section("效果鉤子：afterUse 可要求重複使用（單方面攻擊、硬幣重置）");
+    {
+      let runs = 0;
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 1, coinPower: 1,
+        afterUse: function (ctx) { runs++; ctx.runtime.repeat = runs < 3; }
+      });
+      const atk = mkEntity({ name: "攻方" });
+      const tgt = mkEntity({ name: "目標", hp: 10000, maxHp: 10000 });
+      const use = runGen(T.beginSkillUse(atk, sk, tgt, null, [])).value;
+      const events = [];
+      runGen(T.runAttackDamage(atk, tgt, sk, C.makeCoinRuntime(sk), use, null, events),
+        [1, 1, 1]);
+      eq(runs, 3, "afterUse 連續要求兩次重用 → 共跑 3 遍");
+      eq(events.filter(function (m) { return m.indexOf("重複使用第") !== -1; }).length, 2,
+        "事件紀錄有兩筆重複使用");
+    }
+
+    section("效果鉤子：重複使用有硬上限（保險絲）");
+    {
+      const sk = mkSkill({
+        coins: ["normal"], basePower: 1, coinPower: 1,
+        afterUse: function (ctx) { ctx.runtime.repeat = true; }   // 故意寫成無限
+      });
+      const atk = mkEntity({ name: "攻方" });
+      const tgt = mkEntity({ name: "目標", hp: 100000, maxHp: 100000 });
+      const use = runGen(T.beginSkillUse(atk, sk, tgt, null, [])).value;
+      const events = [];
+      runGen(T.runAttackDamage(atk, tgt, sk, C.makeCoinRuntime(sk), use, null, events),
+        new Array(60).fill(1));
+      eq(events.some(function (m) { return m.indexOf("強制中止") !== -1; }), true,
+        "達上限時強制中止並留下警告");
+    }
+
+    section("【恍惚】拚點也觸發，但會被提前消耗掉（裁決 8）");
+    {
+      const sk = mkSkill({ coins: ["normal", "normal", "normal"], basePower: 5, coinPower: 5 });
+      const e = mkEntity({ name: "被上恍惚者" });
+      S.apply(e, "恍惚", 1, 0);
+      const rt = C.makeCoinRuntime(sk);
+
+      const ev = [];
+      const roll = C.rollAllCoins(rt, 5, 5, 0, ALWAYS_HEAD, e, ev);
+      eq(roll.power, 15, "第一枚幣威歸零 → 5 + 0 + 5 + 5 = 15（未上恍惚時是 20）");
+      eq(S.layerOf(e, "恍惚"), 0, "1 層恍惚只廢掉 1 枚，當場用完");
+
+      const roll2 = C.rollAllCoins(rt, 5, 5, 0, ALWAYS_HEAD, e, ev);
+      eq(roll2.power, 20, "恍惚已用完 → 之後的交換與傷害階段完全正常");
+    }
+
+    section("【恍惚】不帶 entity 時不觸發（維持舊呼叫的相容性）");
+    {
+      const sk = mkSkill({ coins: ["normal"], basePower: 5, coinPower: 5 });
+      const e = mkEntity();
+      S.apply(e, "恍惚", 3, 0);
+      const roll = C.rollAllCoins(C.makeCoinRuntime(sk), 5, 5, 0, ALWAYS_HEAD);
+      eq(roll.power, 10, "沒傳 entity → 不讀恍惚（純函式呼叫維持原行為）");
+      eq(S.layerOf(e, "恍惚"), 3, "層數也不會被扣");
+    }
+
+    section("Effects：回血、專注力、資源");
+    {
+      const ev = [];
+      const e = mkEntity({ name: "傷者", hp: 100, maxHp: 260, focus: 0,
+        resources: { 子彈: 2 }, resourceMax: { 子彈: 9 } });
+      eq(E.heal(e, 39, "秘方藥", ev), 39, "回血 39");
+      eq(E.heal(e, 9999, "溢出", ev), 260 - 139, "回血封頂在 maxHp");
+      eq(E.addFocus(e, -50, "測試", ev), -40, "專注力夾在 −40");
+      eq(E.setFocus(e, 30, "秘方藥", ev), 30, "setFocus 是「調整至」不是相加");
+      eq(E.spend(e, "子彈", 3, "射擊", ev), false, "資源不足 → 回 false 且不扣");
+      eq(E.resourceOf(e, "子彈"), 2, "不足時數量不變");
+      eq(E.spend(e, "子彈", 2, "射擊", ev), true, "足夠 → 扣掉");
+      eq(E.gain(e, "子彈", 99, "裝填", ev), 9, "補充吃 resourceMax 上限");
+
+      const dead = mkEntity({ hp: 0 });
+      eq(E.heal(dead, 50, "", ev), 0, "倒下者不能被治療");
     }
 
     return { pass: pass, fail: fail, failures: failures, lines: lines };

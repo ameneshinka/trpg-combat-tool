@@ -89,8 +89,13 @@
       basePower: o.basePower || 0,
       coinPower: o.coinPower || 0,
       coins: o.coins || [],               // 有順序；設計慣例：普通幣在前段、紅幣在後段
-      onUse: o.onUse || null,             // function(ctx) 使用時
-      onHit: o.onHit || null,             // function(ctx) 命中時
+      // --- 效果鉤子（engine/effects.js）---
+      // ⚠ coinEffects 依「原始硬幣位置」索引，與 coins 一一對應；
+      //   每格 = { onUse, onHead, onHit, afterHit }，不需要的格子放 null。
+      coinEffects: o.coinEffects || null,
+      onUse: o.onUse || null,             // function(ctx) 技能層級 [使用時]（拚點之前，可改威力）
+      onHit: o.onHit || null,             // function(ctx) 整把技能的硬幣都跑完之後
+      afterUse: o.afterUse || null,       // function*(ctx) [使用後]；設 ctx.runtime.repeat 可要求重複使用
       text: o.text || "",                 // ★ 技能文本：角卡上的原文，桌邊查詢用（顯示在角色詳情浮窗）
       notes: o.notes || ""                //   設計備註：給設計者看的，與 text 分開顯示
     };

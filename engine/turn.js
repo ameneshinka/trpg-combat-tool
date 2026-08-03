@@ -513,6 +513,81 @@
   }
   Turn.buildPairing = buildPairing;
 
+  // ---------------- 技能使用的效果鉤子外殼 ----------------
+  /**
+   * 開始一次技能使用：建立 runtime，跑技能層級的 [使用時]。
+   * ⚠ 這一段在「拚點之前」跑 —— 威力修正（威爾技能C 的條件式加成、旭閃躲的勁足加成）
+   *   必須吃得到拚點，否則加成形同虛設。
+   * 資源消耗不放在這裡（拚輸不該扣）—— 放在逐枚的 coin.onUse 或技能成功後的路徑。
+   *
+   * 回傳 { runtime, basePower, coinPower }
+   */
+  function* beginSkillUse(entity, skill, target, battle, events, reuseRuntime) {
+    const E = global.Effects;
+    // reuseRuntime：技能C 遞迴重用時沿用同一份（裁決 12：條件式加成只算一次）
+    const runtime = reuseRuntime || E.makeRuntime();
+    if (!reuseRuntime && skill.onUse) {
+      yield* E.call(skill.onUse, E.makeCtx({
+        self: entity, target: target, skill: skill,
+        battle: battle, events: events, runtime: runtime
+      }));
+    }
+    return {
+      runtime: runtime,
+      basePower: S.effectiveBasePower(entity, skill) + (runtime.basePowerBonus || 0),
+      coinPower: skill.coinPower + (runtime.coinPowerBonus || 0)
+    };
+  }
+  Turn.beginSkillUse = beginSkillUse;
+
+  const MAX_SKILL_REPEATS = 20;   // 保險絲：任何 afterUse 迴圈的硬上限
+
+  /**
+   * 跑一次攻擊的傷害結算，並處理技能層級的 [使用後]。
+   * afterUse 可以把 runtime.repeat 設為 true 要求「重複使用」（威爾技能C）：
+   *   ⚠ 重用一律是單方面攻擊，不重新拚點（裁決 10）
+   *   ⚠ 重用時硬幣重置為全新狀態，但 runtime 沿用（加成不重算）
+   */
+  function* runAttackDamage(attacker, target, skill, coinRuntime, use, battle, events) {
+    const E = global.Effects;
+    let rt = coinRuntime;
+    let repeats = 0;
+    while (true) {
+      const res = yield* D.resolveDamage(attacker, target, rt, use.basePower, use.coinPower,
+        skill.name, { fx: { skill: skill, battle: battle, runtime: use.runtime } });
+      res.events.forEach(function (m) { events.push(m); });
+
+      // 整把技能的 [命中後]（與逐枚的 afterHit 不同：這是全部硬幣跑完才一次）
+      if (skill.onHit && target.hp >= 0) {
+        yield* E.call(skill.onHit, E.makeCtx({
+          self: attacker, target: target, skill: skill,
+          battle: battle, events: events, runtime: use.runtime
+        }));
+      }
+
+      // 技能層級 [使用後]
+      use.runtime.repeat = false;
+      if (skill.afterUse) {
+        yield* E.call(skill.afterUse, E.makeCtx({
+          self: attacker, target: target, skill: skill,
+          battle: battle, events: events, runtime: use.runtime
+        }));
+      }
+      if (!use.runtime.repeat) break;
+      if (target.hp <= 0) { events.push(target.name + " 已倒下，停止重複使用"); break; }
+      if (++repeats >= MAX_SKILL_REPEATS) {
+        events.push("⚠ " + skill.name + " 重複使用次數達上限 " + MAX_SKILL_REPEATS + "，強制中止");
+        break;
+      }
+      events.push("↻ " + attacker.name + "《" + skill.name + "》重複使用第 " + repeats +
+        " 次（單方面攻擊，不重新拚點）");
+      rt = C.makeCoinRuntime(skill);   // 重用＝全新的硬幣狀態
+      use.runtime.stop = false;
+    }
+  }
+
+  Turn.runAttackDamage = runAttackDamage;
+
   // ---------------- 階段三～五：依 DEX 序列結算 ----------------
   function* resolveEntry(battle, entry, events) {
     const byId = {};
@@ -546,11 +621,8 @@
       if (skillA.type !== "attack") { events.push(a.name + " 的防禦型技能無對手，無事發生"); return; }
       events.push("── " + a.name + "《" + skillA.name + "》單方面攻擊 " + target.name + "（無人抵擋）");
       const rtA = acquireCoinRuntime(a, skillA);
-      const baseA = S.effectiveBasePower(a, skillA);
-      if (skillA.onUse) skillA.onUse({ self: a, target: target, events: events, S: S });
-      const res = yield* D.resolveDamage(a, target, rtA, baseA, skillA.coinPower, skillA.name, {});
-      res.events.forEach(function (m) { events.push(m); });
-      if (skillA.onHit && target.hp >= 0) skillA.onHit({ self: a, target: target, events: events, S: S });
+      const use = yield* beginSkillUse(a, skillA, target, battle, events);
+      yield* runAttackDamage(a, target, skillA, rtA, use, battle, events);
       return;
     }
 
@@ -569,12 +641,12 @@
 
     const rtA = acquireCoinRuntime(a, skillA);
     const rtB = acquireCoinRuntime(b, skillB);
-    const baseA = S.effectiveBasePower(a, skillA);
-    const baseB = S.effectiveBasePower(b, skillB);
 
     events.push("── 拚點：" + a.name + "《" + skillA.name + "》 vs " + b.name + "《" + skillB.name + "》");
-    if (skillA.onUse) skillA.onUse({ self: a, target: b, events: events, S: S });
-    if (skillB.onUse) skillB.onUse({ self: b, target: a, events: events, S: S });
+    // 技能層級 [使用時]：在拚點之前跑，威力修正才吃得到拚點
+    const useA = yield* beginSkillUse(a, skillA, b, battle, events);
+    const useB = yield* beginSkillUse(b, skillB, a, battle, events);
+    const baseA = useA.basePower, baseB = useB.basePower;
 
     // 【防守】不論拚點輸贏都給臨時生命值（它的作用就是吸收這次傷害）
     // ⚠ 規則未明訂「防守是否需拚贏才生效」—— 採此裁決，見 README 的未定義裁決清單
@@ -586,8 +658,8 @@
     }
 
     const result = global.Clash.resolveClash(
-      { entity: a, skill: skillA, coinRuntime: rtA, basePower: baseA },
-      { entity: b, skill: skillB, coinRuntime: rtB, basePower: baseB },
+      { entity: a, skill: skillA, coinRuntime: rtA, basePower: baseA, coinPower: useA.coinPower },
+      { entity: b, skill: skillB, coinRuntime: rtB, basePower: baseB, coinPower: useB.coinPower },
       {}
     );
     result.events.forEach(function (m) { events.push(m); });
@@ -791,6 +863,8 @@
     return rows;
   }
   Turn.buildDeclarationBoard = buildDeclarationBoard;
+
+  Turn.resolveEntry = resolveEntry;
 
   // ---------------- 完整一回合（六階段） ----------------
   function* runTurn(battle, events, opts) {

@@ -40,6 +40,20 @@
     const rng = opts.rng;
     const events = [];
     const hits = [];
+    const E = global.Effects;
+
+    // fx = { skill, battle, runtime } —— 有帶才跑逐枚效果鉤子。
+    // 碎幣追加攻擊不帶 fx（它不是「使用技能」，不該再觸發一次逐枚效果）。
+    const fx = opts.fx || null;
+    const runtime = fx ? fx.runtime : null;
+    function coinCtx(coin, extra) {
+      return E.makeCtx(Object.assign({
+        self: attacker, target: target, skill: fx.skill, battle: fx.battle,
+        events: events, runtime: runtime,
+        coinIndex: coin.index, coin: coin
+      }, extra || {}));
+    }
+    function fxOf(coin) { return fx ? E.coinEffect(fx.skill, coin.index) : null; }
 
     const rollable = coinRuntime.filter(function (c) { return c.status !== C.LOST; });
     if (rollable.length === 0) {
@@ -60,7 +74,15 @@
 
     for (let i = 0; i < rollable.length; i++) {
       if (target.hp <= 0) { events.push(target.name + " 已倒下，停止後續硬幣結算"); break; }
+      if (runtime && runtime.stop) break;   // 逐枚鉤子要求中止（例：子彈不足）
       const coin = rollable[i];
+      const ce = fxOf(coin);
+
+      // 0. 逐枚 [使用時]：該枚開打前（扣資源、對目標預先施加狀態）
+      if (ce && ce.onUse) {
+        yield* E.call(ce.onUse, coinCtx(coin));
+        if (runtime && runtime.stop) break;
+      }
 
       // 1. 擲該枚硬幣。正面 → 把「該枚的有效幣威」加進最終威力。
       const isHead = (rng || Math.random)() < prob;
@@ -90,6 +112,12 @@
         } else {
           events.push("【凝神】未觸發 (1d20=" + d20 + " ≥ " + conLevel + " 級)");
         }
+      }
+
+      // 2.5 逐枚 [硬幣正面時]：⚠ 排在凝神判定「之後」
+      //     → 這枚剛上的凝神，這枚自己吃不到（裁決 14：給後續的重用吃）
+      if (isHead && ce && ce.onHead) {
+        yield* E.call(ce.onHead, coinCtx(coin, { isHead: true }));
       }
 
       // 3. 分組相乘 → 無條件退位
@@ -128,6 +156,15 @@
         S.enterConfusion(target, events);
         events.push("→ 同一次攻擊剩餘的硬幣立即吃 +80%");
       }
+
+      // 6. 逐枚 [命中時] → [命中後]
+      //    ⚠ 反面照樣算命中（反面只是不加威力，硬幣仍然打出去了）—— 裁決 33
+      if (ce) {
+        const hitCtx = coinCtx(coin, { isHead: isHead });
+        hitCtx.damage = dmg;
+        if (ce.onHit) yield* E.call(ce.onHit, hitCtx);
+        if (ce.afterHit) yield* E.call(ce.afterHit, hitCtx);
+      }
     }
 
     return { hits: hits, totalDamage: total, events: events };
@@ -159,7 +196,8 @@
   function* resolveGuard(entity, skill, coinRuntime, basePower, opts) {
     opts = opts || {};
     const events = [];
-    const roll = C.rollAllCoins(coinRuntime, basePower, skill.coinPower, entity.focus, opts.rng);
+    const cp = opts.coinPower !== undefined ? opts.coinPower : skill.coinPower;
+    const roll = C.rollAllCoins(coinRuntime, basePower, cp, entity.focus, opts.rng, entity, events);
     const gain = Math.max(0, roll.power) * 5;
     entity.tempHp = (entity.tempHp || 0) + gain;
     events.push("【防守】" + entity.name + "：最終威力 " + roll.power + " × 5 = 臨時生命值 +" + gain +

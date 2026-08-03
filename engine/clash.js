@@ -20,9 +20,11 @@
 
   // ---------------- coinRuntime ----------------
   // 每次技能使用開始時建立全新的執行期硬幣狀態。
+  // ⚠ index = 硬幣在技能序列裡的「原始位置」，用來對應 skill.coinEffects[i]。
+  //   傷害結算時會濾掉已損失的硬幣，可擲序與原始序不一致 —— 逐枚效果一定要看 index。
   function makeCoinRuntime(skill) {
-    return skill.coins.map(function (c) {
-      return { type: (typeof c === "string" ? c : c.type), status: INTACT };
+    return skill.coins.map(function (c, i) {
+      return { index: i, type: (typeof c === "string" ? c : c.type), status: INTACT };
     });
   }
   Clash.makeCoinRuntime = makeCoinRuntime;
@@ -48,7 +50,7 @@
    * ⚠ 逐枚累加各自的有效幣威（碎幣 +1、完好 = 幣威）。
    * ⚠ 最終威力下限為 0（基礎威力可為負）。
    */
-  function rollAllCoins(coinRuntime, basePower, skillCoinPower, focus, rng) {
+  function rollAllCoins(coinRuntime, basePower, skillCoinPower, focus, rng, entity, events) {
     const prob = S.headsProbability(focus);
     let power = basePower;
     let heads = 0;
@@ -56,7 +58,15 @@
     coinRuntime.forEach(function (c, i) {
       if (c.status === LOST) return;
       const isHead = flip(prob, rng);
-      const eff = effectiveCoinPower(c, skillCoinPower);
+      let eff = effectiveCoinPower(c, skillCoinPower);
+      // 【恍惚】「使用技能擲硬幣時」該枚幣威歸零 —— 拚點的擲幣也算（裁決 8）。
+      // ⚠ 觸發粒度是「每枚各一次、每次層 −1」→ 1 層恍惚只廢掉 1 枚，
+      //   而拚點比傷害早，所以恍惚通常會在拚點階段就被消耗掉。
+      if (entity && S.layerOf(entity, "恍惚") > 0) {
+        eff = 0;
+        S.addLayer(entity, "恍惚", -1);
+        if (events) events.push("【恍惚】觸發：" + entity.name + " 這枚硬幣的幣威歸零（恍惚層 −1）");
+      }
       if (isHead) { power += eff; heads++; }
       detail.push({ index: i, type: c.type, status: c.status, head: isHead, effPower: eff });
     });
@@ -114,6 +124,9 @@
     const rng = opts.rng;
     const events = [];
     const nameA = sideA.entity.name, nameB = sideB.entity.name;
+    // 幣威可被技能層級的 [使用時] 修改（旭的閃躲、威爾技能C）→ 呼叫端算好後傳進來
+    const cpA = sideA.coinPower !== undefined ? sideA.coinPower : sideA.skill.coinPower;
+    const cpB = sideB.coinPower !== undefined ? sideB.coinPower : sideB.skill.coinPower;
 
     // 拚點全程使用「拚點開始前」的專注力值擲幣
     const focusA = sideA.entity.focus, focusB = sideB.entity.focus;
@@ -141,8 +154,8 @@
       S.onExchangeTriggers(sideA.entity, events);
       S.onExchangeTriggers(sideB.entity, events);
 
-      const rollA = rollAllCoins(sideA.coinRuntime, sideA.basePower, sideA.skill.coinPower, focusA, rng);
-      const rollB = rollAllCoins(sideB.coinRuntime, sideB.basePower, sideB.skill.coinPower, focusB, rng);
+      const rollA = rollAllCoins(sideA.coinRuntime, sideA.basePower, cpA, focusA, rng, sideA.entity, events);
+      const rollB = rollAllCoins(sideB.coinRuntime, sideB.basePower, cpB, focusB, rng, sideB.entity, events);
 
       events.push("交換 #" + k + "：" + nameA + " 正面 " + rollA.heads + "／" + rollA.detail.length +
         " → 最終威力 " + rollA.power + "　vs　" + nameB + " 正面 " + rollB.heads + "／" + rollB.detail.length +
