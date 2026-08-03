@@ -336,16 +336,16 @@
     {
       const e = mkEntity({ name: "延燒者", hp: 1000, maxHp: 1000, tempHp: 3 });
       S.addLayer(e, "延燒", 2); S.addLevel(e, "延燒", 5);
-      T.runTurnEndPhase([e], []);
+      runGen(T.runTurnEndPhase([e], []));
       eq(e.hp, 998, "回合結束傷害先扣臨時生命值，剩餘才打真血（5 − 3 = 2）");
       eq(e.tempHp, 0, "臨時生命值在傷害結算之後才歸零");
       eq(S.layerOf(e, "延燒"), 1, "延燒的層 −1 與通則視為同一次，不重複扣（2 → 1）");
 
       const e2 = mkEntity({ name: "被動獲益者" });
       S.apply(e2, "傷害強化", 2, 0, { exemptThisTurn: true });
-      T.runTurnEndPhase([e2], []);
+      runGen(T.runTurnEndPhase([e2], []));
       eq(S.layerOf(e2, "傷害強化"), 2, "步驟1 新增的狀態豁免本次層 −1（維持 2 層）");
-      T.runTurnEndPhase([e2], []);
+      runGen(T.runTurnEndPhase([e2], []));
       eq(S.layerOf(e2, "傷害強化"), 1, "下一回合結束才開始扣（2 → 1）");
     }
 
@@ -568,7 +568,7 @@
       const rt3 = T.acquireCoinRuntime(e, dodge);
       eq(C.hasIntact(rt3), false, "閃躲失敗後，本回合再取用仍是損失狀態（擋不住了）");
 
-      T.runTurnEndPhase([e], []);
+      runGen(T.runTurnEndPhase([e], []));
       const rt4 = T.acquireCoinRuntime(e, dodge);
       eq(rt4[0].status, C.INTACT, "回合結束後恢復完好");
 
@@ -937,7 +937,7 @@
       eq(S.layerOf(e, "爆裂綻放"), 1, "爆裂綻放上限 1 層");
 
       S.apply(e, "守護", 3, 0);   // 對照組：一般狀態照減
-      T.runTurnEndPhase([e], []);
+      runGen(T.runTurnEndPhase([e], []));
       eq(S.layerOf(e, "仁心"), 4, "noDecay：回合結束不減");
       eq(S.layerOf(e, "守護"), 2, "對照組：一般狀態照通則 −1");
     }
@@ -1036,11 +1036,302 @@
 
     section("DEX 換算到角卡尺度（1–99）");
     {
-      const target = Ch.pcRoster()[0];
+      const target = Ch.testTarget();
       const gob = Ch.spawn("goblin_grunt", 1)[0];
       eq([target.dex, gob.dex], [60, 40], "測試標靶 60、哥布林兵 40（與 PC 的 50–90 同一把尺）");
+      eq(Ch.pcRoster().map(function (p) { return p.name + p.dex; }),
+        ["威爾‧賽爾弗特65", "夜櫻結月60", "渡邊旭90", "霧島和真50"], "四名 PC 的 DEX");
       S.apply(gob, "迅捷", 5, 0);
       eq(S.effectiveDex(gob), 40 * 1.25, "迅捷是百分比，換尺度後照常運作");
+    }
+
+    // ============================================================
+    // 四名 PC（每條裁決各一則）
+    // ============================================================
+    const P = global.Passives;
+    function pc(id) { return Ch.pcRoster().find(function (p) { return p.id === id; }); }
+    function skOf(e, id) { return e.skillLibrary.find(function (s) { return s.id === id; }); }
+    function mkBattle(list) {
+      list.forEach(function (e) { e.canAct = true; e.declarations = e.declarations || []; });
+      return { turnNumber: 1, entities: list, pcGrowthOrder: [], turnOrder: list };
+    }
+    // 這些整合測試要可重現 → 暫時把 Math.random 換掉（0 = 永遠正面）
+    function withRandom(value, fn) {
+      const orig = Math.random;
+      Math.random = function () { return value; };
+      try { return fn(); } finally { Math.random = orig; }
+    }
+    // 跑一次完整的技能使用（單方面攻擊），硬幣一律正面
+    function useSkill(actor, target, skill, battle, events, answers) {
+      return withRandom(0, function () {
+        const rt = C.makeCoinRuntime(skill);
+        const gen = (function* () {
+          const use = yield* T.beginSkillUse(actor, skill, target, battle, events);
+          yield* T.runAttackDamage(actor, target, skill, rt, use, battle, events);
+        })();
+        return runGen(gen, answers || new Array(60).fill(1));
+      });
+    }
+
+    section("威爾：技能C 從 9 發連射恰好 4 次，且過程中快速裝填不觸發");
+    {
+      const will = pc("pc_will");
+      const dummy = mkEntity({ id: "d", name: "肉靶", hp: 99999, maxHp: 99999 });
+      const battle = mkBattle([will, dummy]);
+      const ev = [];
+      const r = useSkill(will, dummy, skOf(will, "w_c"), battle, ev);
+      eq(will.resources["子彈"], 1, "9 → 7 → 5 → 3 → 1，剛好停在 1 發");
+      eq(ev.filter(function (m) { return m.indexOf("重複使用第") !== -1; }).length, 3,
+        "重複使用 3 次（＋第一次＝共 4 次）");
+      eq(r.asked.some(function (q) { return q.type === "passiveChoice"; }), false,
+        "連鎖期間不問快速裝填（裁決 9：[使用後] 算在傷害結算期間內）");
+    }
+
+    section("威爾：技能C 的條件式加成只算一次，全程沿用（裁決 12）");
+    {
+      const will = pc("pc_will");
+      const dummy = mkEntity({ id: "d", name: "肉靶", hp: 99999, maxHp: 99999 });
+      S.apply(dummy, "震顫", 3, 12);      // 12 級 → 幣威 +5（封頂）
+      S.apply(dummy, "易損", 2, 0);       // 2 層 → 基威 +2
+      const battle = mkBattle([will, dummy]);
+      const ev = [];
+      useSkill(will, dummy, skOf(will, "w_c"), battle, ev);
+      const line = ev.find(function (m) { return m.indexOf("條件式加成") !== -1; });
+      eq(!!line && line.indexOf("幣威 +5") !== -1 && line.indexOf("基威 +2") !== -1, true,
+        "震顫 12 級 → 幣威 +5（封頂）；易損 2 層 → 基威 +2");
+      eq(ev.filter(function (m) { return m.indexOf("條件式加成") !== -1; }).length, 1,
+        "四輪連射只算一次（第一輪就把震顫炸掉了，但加成不重算）");
+    }
+
+    section("威爾：拚輸 → 不重用、子彈一發都不扣（裁決 11、13）");
+    {
+      const will = pc("pc_will");
+      const foe = mkEntity({ id: "f", name: "強敵", hp: 9999, maxHp: 9999,
+        skillLibrary: [mkSkill({ id: "big", basePower: 99, coinPower: 99, coins: ["normal"] })] });
+      const battle = mkBattle([will, foe]);
+      will.declarations = [{ slotIndex: 0, skillId: "w_c", action: "attack", targetId: "f" }];
+      foe.declarations = [{ slotIndex: 0, skillId: "big", action: "attack", targetId: will.id }];
+      const ev = [];
+      runGen(T.resolveEntry(battle, {
+        kind: "clash", aEntityId: will.id, aSkillId: "w_c", aSlot: 0,
+        bEntityId: "f", bSkillId: "big", bSlot: 0, targetId: "f"
+      }, ev), new Array(40).fill(1));
+      eq(will.resources["子彈"], 9, "拚輸 → 子彈一發都沒扣（[使用時] 在傷害結算才跑）");
+      eq(ev.some(function (m) { return m.indexOf("重複使用第") !== -1; }), false, "也不會重複使用");
+    }
+
+    section("威爾：槍械破甲 —— 爆發落空也給易損（裁決 7）");
+    {
+      const will = pc("pc_will");
+      const dummy = mkEntity({ id: "d", name: "乾淨目標", hp: 9999, maxHp: 9999 });
+      const battle = mkBattle([will, dummy]);
+      const ev = [];
+      // 技能C 只有一枚硬幣、只給級數不給層 → 對乾淨目標爆發必定落空
+      // （子彈壓成 2 發，打完剩 0 → 不會觸發重複使用）
+      will.resources["子彈"] = 2;
+      useSkill(will, dummy, skOf(will, "w_c"), battle, ev);
+      eq(S.layerOf(dummy, "易損") >= 1, true, "爆發落空仍施加【易損】");
+      eq(ev.some(function (m) { return m.indexOf("無累積的震顫級數") !== -1; }), true,
+        "事件紀錄顯示爆發確實落空");
+    }
+
+    section("結月：技能C 第一枚的凝神級數確實蒸發（裁決 18）");
+    {
+      const y = pc("pc_yuzuki");
+      const dummy = mkEntity({ id: "d", name: "肉靶", hp: 9999, maxHp: 9999 });
+      const battle = mkBattle([y, dummy]);
+      const ev = [];
+      useSkill(y, dummy, skOf(y, "y_c"), battle, ev,
+        [1].concat(new Array(40).fill(20)));   // 乘數1、凝神 1d20 全不觸發
+      eq(ev.some(function (m) { return m.indexOf("層數為 0，級數無法預存") !== -1; }), true,
+        "第一枚的 [正面時] 3 級被丟掉（層數還沒鎖上）");
+      eq(S.layerOf(y, "凝神"), 4, "三枚各給層 → 1+1+2 = 4 層");
+      eq(S.levelOf(y, "凝神"), 9, "存得住的只有第二、三枚的 4+5 = 9 級");
+    }
+
+    section("結月：爆裂綻放記帳收尾，自己疊的完整保留（裁決 21、22）");
+    {
+      const y = pc("pc_yuzuki");
+      const battle = mkBattle([y]);
+      S.apply(y, "爆裂綻放", 1, 0, { isMark: true, noDecay: true, maxLayer: 1 });
+      S.apply(y, "虛弱", 13, 0);
+      S.apply(y, "凝神", 2, 0);          // 先有凝神層，級數才存得住
+      const ev = [];
+      runGen(P.runTurnStart(battle, ev));
+      eq(S.layerOf(y, "傷害強化"), 13, "13 層虛弱 → 傷害強化 +13");
+      eq(S.layerOf(y, "強壯"), 6, "「一半」無條件捨去 → ⌊13/2⌋ = 6");
+      eq(S.layerOf(y, "虛弱"), 0, "虛弱歸零");
+      // 回合中她自己又疊了一些
+      S.apply(y, "傷害強化", 3, 0);
+      runGen(P.runTurnEnd([y], battle, ev));
+      eq(S.layerOf(y, "傷害強化"), 3, "只收回綻放給的 13 層，自己疊的 3 層保留");
+      eq(S.layerOf(y, "爆裂綻放"), 0, "標記歸零");
+    }
+
+    section("結月：傷害強化吃 16 層上限（裁決 22）");
+    {
+      const y = pc("pc_yuzuki");
+      const battle = mkBattle([y]);
+      S.apply(y, "爆裂綻放", 1, 0, { isMark: true, noDecay: true, maxLayer: 1 });
+      S.apply(y, "虛弱", 20, 0);
+      runGen(P.runTurnStart(battle, []));
+      eq(S.layerOf(y, "傷害強化"), 16, "20 層虛弱也只拿得到 16 層（上限）");
+      eq(S.layerOf(y, "強壯"), 10, "強壯沒有上限 → ⌊20/2⌋ = 10");
+    }
+
+    section("結月：乘勝指揮把超過 20 的凝神級數換成層數");
+    {
+      const y = pc("pc_yuzuki");
+      const battle = mkBattle([y]);
+      S.apply(y, "凝神", 1, 35);
+      runGen(P.runTurnStart(battle, []));
+      eq(S.levelOf(y, "凝神"), 20, "35 級 → 超過 20 的 15 級被換掉");
+      eq(S.layerOf(y, "凝神"), 4, "1 + 3 層（一回合最多換 3 層）");
+    }
+
+    section("旭：被動2 與被動4 的加減剛好淨 0（裁決 25）");
+    {
+      const a = pc("pc_akira");
+      const gob = Ch.spawn("goblin_grunt", 1)[0];
+      const battle = mkBattle([a, gob]);
+      S.apply(a, "勁足", 13, 0, { isMark: true, noDecay: true });  // 回合開始 +2 → 15
+      runGen(P.runTurnStart(battle, []));
+      eq(S.layerOf(a, "勁足"), 15, "勁足 13 → 每回合 +2 → 15");
+      eq([S.layerOf(a, "守護"), S.layerOf(a, "傷害強化"), S.layerOf(a, "迅捷")], [3, 3, 5],
+        "守護 +3、傷害強化 +3、迅捷 +⌊15/3⌋ = 5");
+      eq(S.layerOf(gob, "傷害弱化"), 3, "勁足 ≥15 → 敵方 3 層傷害弱化（本回合限定）");
+
+      runGen(T.runTurnEndPhase(battle.entities, [], {
+        runTurnEndPassives: function* (alive, ev) { yield* P.runTurnEnd(alive, battle, ev); }
+      }));
+      eq([S.layerOf(a, "守護"), S.layerOf(a, "傷害強化"), S.layerOf(a, "迅捷")], [0, 0, 0],
+        "被動4 的 −2/−2/−4 加上通則 −1 → 三條剛好歸零（淨 0，不會累積）");
+      eq(S.layerOf(gob, "傷害弱化"), 0, "敵方的傷害弱化也一併收回（不會無限疊高）");
+      eq(S.layerOf(a, "勁足"), 15, "〈勁足〉noDecay，回合結束不減");
+    }
+
+    section("旭：振刀達 17 層 → 歸零並解鎖《肉斬骨斷》（本回合限定）");
+    {
+      const a = pc("pc_akira");
+      const battle = mkBattle([a]);
+      S.apply(a, "勁足", 15, 0, { isMark: true, noDecay: true });   // +2 → 17
+      runGen(P.runTurnStart(battle, []));
+      eq(S.layerOf(a, "勁足"), 0, "達門檻 → 勁足歸零");
+      eq(a.tempSkillIds, ["a_d"], "解鎖技能D");
+      eq(T.freeUseSkills(a).map(function (s) { return s.id; }), ["guard", "dodge", "a_d"],
+        "技能D 進入「不受抽選限制」清單（裁決 27）");
+      // 先拿增益再歸零（lifecycle.md：buff 先於 cost）
+      eq(S.layerOf(a, "守護"), 3, "殺手本位的增益在振刀歸零之前就先拿到了");
+
+      runGen(P.runTurnEnd([a], battle, []));
+      eq(a.tempSkillIds, [], "回合結束解鎖失效（沒用到就白費，裁決 31）");
+    }
+
+    section("旭：技能D 四次爆發，前三次保留級數（裁決 29）");
+    {
+      const a = pc("pc_akira");
+      const foe = mkEntity({ id: "f", name: "敵人", hp: 5000, maxHp: 5000 });
+      S.apply(foe, "震顫", 2, 30);
+      const battle = mkBattle([a, foe]);
+      const before = S.thresholds(foe).slice();
+      const ev = [];
+      useSkill(a, foe, skOf(a, "a_d"), battle, ev);
+      const bursts = ev.filter(function (m) { return m.indexOf("【震顫爆發】：") !== -1; });
+      eq(bursts.length, 4, "四枚硬幣各引爆一次");
+      eq(ev.filter(function (m) { return m.indexOf("不歸零【震顫】級數") !== -1; }).length, 3,
+        "前三次保留級數，第四次歸零");
+      eq(S.levelOf(foe, "震顫"), 0, "第四次爆發後級數歸零");
+      eq(S.thresholds(foe)[0] > before[0], true, "混亂值被大幅推高");
+      eq(S.layerOf(a, "勁足"), 4, "技能D 只有 [使用後] 給 4 層〈勁足〉（逐枚效果不給）");
+    }
+
+    section("跨角色：旭引爆震顫 → 威爾的援護射擊自動追擊並扣子彈（裁決 16）");
+    {
+      const a = pc("pc_akira"), will = pc("pc_will");
+      const foe = mkEntity({ id: "f", name: "敵人", hp: 9999, maxHp: 9999 });
+      S.apply(foe, "震顫", 3, 20);
+      const battle = mkBattle([a, will, foe]);
+      const ev = [];
+      useSkill(a, foe, skOf(a, "a_c"), battle, ev);   // 硬幣3 會引爆
+      eq(will.pendingInvocations.length, 1, "威爾排入一次自動發動");
+      runGen(T.drainInvocations(battle, ev), new Array(20).fill(1));
+      eq(will.resources["子彈"], 8, "援護射擊消耗 1 發子彈");
+      eq(ev.some(function (m) { return m.indexOf("援護射擊") !== -1; }), true, "事件紀錄有標註");
+    }
+
+    section("跨角色：威爾混亂時，援護射擊不觸發（裁決 16）");
+    {
+      const a = pc("pc_akira"), will = pc("pc_will");
+      const foe = mkEntity({ id: "f", name: "敵人", hp: 9999, maxHp: 9999 });
+      S.apply(foe, "震顫", 3, 20);
+      will.confusionLockTurns = 2;
+      will.isConfused = true;
+      const battle = mkBattle([a, will, foe]);
+      useSkill(a, foe, skOf(a, "a_c"), battle, []);
+      eq((will.pendingInvocations || []).length, 0, "混亂中 → 不觸發");
+    }
+
+    section("和真：技能A 反面也治療，且拚輸不扣仁心（裁決 33、36）");
+    {
+      const k = pc("pc_kazuma");
+      const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, hp: 100, maxHp: 240 });
+      const battle = mkBattle([k, ally]);
+      S.apply(k, "仁心", 4, 0, { isMark: true, noDecay: true, maxLayer: 4 });
+      k.declarations = [{ slotIndex: 0, skillId: "k_a", action: "support", supportId: "ally" }];
+      const ev = [];
+      runGen(T.resolveEntry(battle, {
+        kind: "defenseOnly", aEntityId: k.id, aSkillId: "k_a", aSlot: 0
+      }, ev), new Array(20).fill(1));
+      eq(ally.hp > 100, true, "沒有敵人攻擊他 → 不用拚點，直接治療生效");
+      eq(S.layerOf(ally, "檢傷分類"), 1, "[使用後] 給對象〈檢傷分類〉");
+      eq(S.layerOf(k, "仁心"), 4, "[使用時] −1、[使用後] +1 → 淨 0");
+    }
+
+    section("和真：秘方藥解除混亂後本回合立刻能動（裁決 38）");
+    {
+      const k = pc("pc_kazuma");
+      const battle = mkBattle([k]);
+      S.apply(k, "茶乃的秘方藥", 5, 0, { isMark: true, noDecay: true, maxLayer: 5 });
+      S.enterConfusion(k, []);
+      eq([k.isConfused, k.confusionLockTurns, k.cantActRestOfTurn], [true, 2, true], "先進入混亂");
+      const ev = [];
+      runGen(P.fire(k, "onAfterSkillResolved", battle, ev), ["yes", "no"]);
+      eq([k.isConfused, k.confusionLockTurns, k.cantActRestOfTurn], [false, 0, false],
+        "全部解除，本回合立刻能動");
+      eq(k.focus, 30, "專注力「調整至」30");
+      eq(S.layerOf(k, "茶乃的秘方藥"), 2, "消耗 3 層");
+    }
+
+    section("和真：急救的守護債務兩回合後才結算（裁決 40）");
+    {
+      const k = pc("pc_kazuma");
+      const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, hp: 100, maxHp: 240 });
+      S.enterConfusion(ally, []);
+      const battle = mkBattle([k, ally]);
+      S.apply(k, "仁心", 4, 0, { isMark: true, noDecay: true, maxLayer: 4 });
+      const ev = [];
+      runGen(P.runTurnEnd([k], battle, ev), ["ally"]);
+      eq(S.layerOf(ally, "守護"), 10, "獲救者 +10 層守護");
+      eq(S.layerOf(ally, "緊急腎上腺素"), 2, "+2 層腎上腺素");
+      eq(S.layerOf(k, "仁心"), 0, "消耗 4 層仁心");
+
+      // 兩個回合之後腎上腺素從 1 掉到 0 → 掛上債務
+      ally.states["緊急腎上腺素"].addedThisTurn = false;   // 模擬進入下一回合
+      S.apply(ally, "緊急腎上腺素", -1, 0);   // 2 → 1
+      runGen(P.runTurnEnd([k], battle, []), ["no"]);
+      eq((ally.pendingDebts || []).length, 1, "腎上腺素剩 1 層 → 掛上 −8 守護的延遲債務");
+      S.runPendingDebts(ally, []);
+      eq(S.layerOf(ally, "守護"), 2, "下回合開始扣 8 層");
+    }
+
+    section("和真的技能A 受抽選限制，不會出現在其他槽位（裁決 34）");
+    {
+      const k = pc("pc_kazuma");
+      eq(T.freeUseSkills(k).map(function (s) { return s.id; }), ["guard", "dodge"],
+        "「不受抽選限制」只認【防守】【閃躲】—— 技能A 雖是防禦型但不在內");
+      const menu = T.buildDrawMenu(k, 6, 6);   // 骰面 6/6 → 都指向 C 槽位
+      eq(menu.options.map(function (o) { return o.id; }), ["k_c", "guard", "dodge"],
+        "骰到 C 槽位時菜單裡沒有技能A");
     }
 
     return { pass: pass, fail: fail, failures: failures, lines: lines };

@@ -117,11 +117,25 @@
   }
   Turn.findSkill = findSkill;
 
-  // 防禦型技能：不受抽選限制，想用就能用（各佔一槽，同回合可多次）
-  function defenseSkills(entity) {
-    return (entity.skillLibrary || []).filter(function (s) { return s.type === "defense"; });
+  /**
+   * 「不受抽選限制」的技能 —— 想用就能用（各佔一槽，同回合可多次）。
+   *
+   * ⚠ 不能用 type === "defense" 判斷。規則（lifecycle.md）只給了【防守】與【閃躲】
+   *   這兩把；和真的技能A 也是防禦型，但它佔著 slotMap 的 A 槽位、受 1d6 抽選限制
+   *   （裁決 34）。照 type 判斷會讓它變成「每個槽位都能選」的萬用治療技。
+   *
+   * 例外：本回合限定解鎖的臨時技能（旭的技能D，裁決 27）也走這條路 —— 見 tempSkillIds。
+   */
+  function freeUseSkills(entity) {
+    const out = (entity.skillLibrary || []).filter(function (s) { return s.isGuard || s.isDodge; });
+    (entity.tempSkillIds || []).forEach(function (id) {
+      const sk = (entity.skillLibrary || []).find(function (s) { return s.id === id; });
+      if (sk && !out.some(function (o) { return o.id === sk.id; })) out.push(sk);
+    });
+    return out;
   }
-  Turn.defenseSkills = defenseSkills;
+  Turn.freeUseSkills = freeUseSkills;
+  Turn.defenseSkills = freeUseSkills;   // 舊名保留（外部呼叫端）
 
   /**
    * 一個槽位的完整可選清單（抽技能當下就用這個）。
@@ -139,7 +153,7 @@
       options.push({ id: id, name: sk ? sk.name : id, kind: "attack" });
     });
     const attackCount = options.length;
-    defenseSkills(entity).forEach(function (sk) {
+    freeUseSkills(entity).forEach(function (sk) {
       if (!options.some(function (o) { return o.id === sk.id; })) {
         options.push({ id: sk.id, name: sk.name, kind: "defense" });
       }
@@ -210,7 +224,7 @@
    * 3. 全體狀態層數 −1（步驟1 才新增的狀態豁免這一次）
    * 4. 更新混亂／恐慌計時
    */
-  function runTurnEndPhase(entities, events, ctx) {
+  function* runTurnEndPhase(entities, events, ctx) {
     events = events || [];
     const alive = entities.filter(function (e) { return e.hp > 0; });
 
@@ -218,7 +232,7 @@
     // ⚠ 延燒只在此扣血，不在此扣層 —— 其層 −1 與步驟 3 的通則「視為同一次」，
     //   交給步驟 3 統一扣，才不會變成扣兩次（也不會變成完全不扣）。
     alive.forEach(function (e) { S.onTurnEndBurn(e, events); });
-    if (ctx && ctx.runTurnEndPassives) ctx.runTurnEndPassives(alive, events);
+    if (ctx && ctx.runTurnEndPassives) yield* ctx.runTurnEndPassives(alive, events);
 
     // --- 步驟 2：臨時生命值歸零 ---
     entities.forEach(function (e) {
@@ -335,6 +349,30 @@
       }
       e.canAct = true;
     });
+
+    // 2.5 整回合動作（威爾的裝填，裁決 15）
+    //     ⚠ 一定要問在「抽技能之前」—— 抽完才說要裝填，那一輪的骰就白抽了。
+    //     選了就放棄本回合全部槽位（連防守／閃躲都不能用），效果在回合結束由被動結算。
+    for (const e of entities) {
+      if (!e.canAct || e.hp <= 0) continue;
+      e.turnActionTaken = null;
+      const opts = [];
+      (global.Passives ? global.Passives.passivesOf(e, events) : []).forEach(function (p) {
+        (p.turnActions || []).forEach(function (act) {
+          if (typeof act.available === "function" && !act.available(e)) return;
+          opts.push({ id: act.id, label: act.label, passiveId: p.id, hint: act.hint || "" });
+        });
+      });
+      if (!opts.length) continue;
+      const pick = yield { type: "turnAction", entityId: e.id, name: e.name, options: opts };
+      if (!pick) continue;
+      const chosen = opts.find(function (o) { return o.id === pick; });
+      if (!chosen) continue;
+      e.turnActionTaken = chosen.id;
+      e.canAct = false;
+      e.slots = 0;
+      events.push("▣ " + e.name + " 本回合執行「" + chosen.label + "」→ 放棄本回合所有槽位");
+    }
 
     // 3. 結算技能對照表（在抽技能之前）
     entities.filter(function (e) { return e.canAct; }).forEach(function (e) {
@@ -591,6 +629,76 @@
 
   Turn.runAttackDamage = runAttackDamage;
 
+  /** 技能層級 [使用後]（防守／治療技用；它們不走 runAttackDamage 的重複使用迴圈）。 */
+  function* runSkillAfterUse(actor, target, skill, use, battle, events) {
+    if (!skill.afterUse) return;
+    yield* global.Effects.call(skill.afterUse, global.Effects.makeCtx({
+      self: actor, target: target, skill: skill,
+      battle: battle, events: events, runtime: use.runtime
+    }));
+  }
+
+  /**
+   * 以友方為目標的技能結算（和真技能A）。
+   * 治療對象存在宣告的 supportId —— targetId 留給「要跟哪個敵人拚點」（裁決 35）。
+   */
+  function* runSupport(battle, actor, skill, coinRuntime, use, entry, events) {
+    const decl = (actor.declarations || []).find(function (d) { return d.slotIndex === entry.aSlot; });
+    const ally = decl && decl.supportId
+      ? battle.entities.find(function (x) { return x.id === decl.supportId; })
+      : null;
+    if (!ally) {
+      events.push("⚠ " + actor.name + "《" + skill.name + "》沒有指定友方對象，無事發生");
+      return;
+    }
+    if (ally.hp <= 0) {
+      events.push("（" + ally.name + " 已倒下，" + skill.name + " 無效）");
+      return;
+    }
+    const r = yield* D.resolveSupport(actor, ally, skill, coinRuntime, {
+      fx: { skill: skill, battle: battle, runtime: use.runtime }
+    });
+    r.events.forEach(function (m) { events.push(m); });
+    yield* runSkillAfterUse(actor, ally, skill, use, battle, events);
+  }
+  Turn.runSupport = runSupport;
+
+  /** 技能結算完之後的被動（威爾的快速裝填 —— 子彈 ≤1 就跳提示問玩家要不要用）。
+   *  ⚠ 呼叫點在 runAttackDamage「外面」，所以技能C 的遞迴連鎖跑完之前不會觸發（裁決 9）。 */
+  function* afterSkillResolved(entity, battle, events) {
+    if (global.Passives && global.Passives.fire) {
+      yield* global.Passives.fire(entity, "onAfterSkillResolved", battle, events);
+    }
+  }
+
+  /**
+   * 消化「被動自動發動」的待發技能（威爾的援護射擊）。
+   * 這些是額外攻擊、不佔槽位（裁決 16），在觸發它的那次結算之後立刻打出去。
+   * ⚠ 用迴圈而不是遞迴 —— 自動發動的技能若又觸發別人的自動發動，要能一路排隊處理完。
+   */
+  function* drainInvocations(battle, events) {
+    let guard = 0;
+    while (guard++ < 30) {
+      const e = battle.entities.find(function (x) {
+        return x.hp > 0 && (x.pendingInvocations || []).length;
+      });
+      if (!e) break;
+      const inv = e.pendingInvocations.shift();
+      const sk = findSkill(e, inv.skillId);
+      const t = battle.entities.find(function (x) { return x.id === inv.targetId; });
+      if (!sk) { events.push("⚠ 找不到自動發動的技能：" + inv.skillId + "（" + e.name + "）"); continue; }
+      if (!t || t.hp <= 0) { events.push("（" + e.name + " 的自動發動目標已倒下，取消）"); continue; }
+      events.push("── ⚡" + (inv.label || "自動發動") + "：" + e.name + "《" + sk.name +
+        "》單方面攻擊 " + t.name + "（額外攻擊，不佔槽位）");
+      const rt = acquireCoinRuntime(e, sk);
+      const use = yield* beginSkillUse(e, sk, t, battle, events);
+      yield* runAttackDamage(e, t, sk, rt, use, battle, events);
+      yield* afterSkillResolved(e, battle, events);
+    }
+    if (guard >= 30) events.push("⚠ 自動發動的連鎖達上限，強制中止");
+  }
+  Turn.drainInvocations = drainInvocations;
+
   // ---------------- 階段三～五：依 DEX 序列結算 ----------------
   function* resolveEntry(battle, entry, events) {
     const byId = {};
@@ -604,16 +712,21 @@
     const skillA = findSkill(a, entry.aSkillId);
     if (!skillA) { events.push("找不到技能 " + entry.aSkillId); return; }
 
-    // --- 只有防禦技，沒有對手 ---
+    // --- 只有防禦技／治療技，沒有對手 ---
     if (entry.kind === "defenseOnly") {
       const rtA = acquireCoinRuntime(a, skillA);
-      const baseA = S.effectiveBasePower(a, skillA);
-      if (skillA.isGuard) {
-        const r = yield* D.resolveGuard(a, skillA, rtA, baseA, {});
+      const useA = yield* beginSkillUse(a, skillA, null, battle, events);
+      if (skillA.targetSide === "ally") {
+        // 沒有敵人攻擊他 → 不用先拚點，直接生效（和真技能A）
+        yield* runSupport(battle, a, skillA, rtA, useA, entry, events);
+      } else if (skillA.isGuard) {
+        const r = yield* D.resolveGuard(a, skillA, rtA, useA.basePower, { coinPower: useA.coinPower });
         r.events.forEach(function (m) { events.push(m); });
+        yield* runSkillAfterUse(a, null, skillA, useA, battle, events);
       } else {
         events.push(a.name + " 使用《" + skillA.name + "》但無人攻擊，無事發生");
       }
+      yield* afterSkillResolved(a, battle, events);
       return;
     }
 
@@ -626,6 +739,12 @@
       const rtA = acquireCoinRuntime(a, skillA);
       const use = yield* beginSkillUse(a, skillA, target, battle, events);
       yield* runAttackDamage(a, target, skillA, rtA, use, battle, events);
+      // 結月被動4：「對敵方單位單方面攻擊時」＋2 層傷害強化、+2 級凝神、專注力 −5
+      if (global.Passives && global.Passives.fire) {
+        yield* global.Passives.fire(a, "onUnilateralAttack", battle, events,
+          { targetId: target.id, skillId: skillA.id });
+      }
+      yield* afterSkillResolved(a, battle, events);
       return;
     }
 
@@ -653,10 +772,14 @@
 
     // 【防守】不論拚點輸贏都給臨時生命值（它的作用就是吸收這次傷害）
     // ⚠ 規則未明訂「防守是否需拚贏才生效」—— 採此裁決，見 README 的未定義裁決清單
-    for (const side of [{ e: a, sk: skillA, rt: rtA, base: baseA }, { e: b, sk: skillB, rt: rtB, base: baseB }]) {
+    for (const side of [
+      { e: a, sk: skillA, rt: rtA, base: baseA, cp: useA.coinPower, use: useA },
+      { e: b, sk: skillB, rt: rtB, base: baseB, cp: useB.coinPower, use: useB }
+    ]) {
       if (side.sk.isGuard) {
-        const r = yield* D.resolveGuard(side.e, side.sk, side.rt, side.base, {});
+        const r = yield* D.resolveGuard(side.e, side.sk, side.rt, side.base, { coinPower: side.cp });
         r.events.forEach(function (m) { events.push(m); });
+        yield* runSkillAfterUse(side.e, null, side.sk, side.use, battle, events);
       }
     }
 
@@ -680,10 +803,31 @@
       const res = yield* D.resolveDamage(winner, loser, winRt, winBase, winSkill.coinPower, winSkill.name, {});
       res.events.forEach(function (m) { events.push(m); });
       if (winSkill.onHit && loser.hp >= 0) winSkill.onHit({ self: winner, target: loser, events: events, S: S });
+    } else if (winSkill.targetSide === "ally") {
+      // 和真技能A：被敵人指定攻擊時要先拚贏，才能繼續使用（拚贏＝擋下攻擊＋治療生效）
+      events.push(winner.name + "《" + winSkill.name + "》通過拚點 → 擋下 " + loser.name +
+        " 的攻擊，治療生效");
+      const winEntry = winIsA ? { aSlot: entry.aSlot } : { aSlot: entry.bSlot };
+      yield* runSupport(battle, winner, winSkill, winRt, winIsA ? useA : useB, winEntry, events);
     } else {
       events.push(winner.name + " 的防禦型技能《" + winSkill.name + "》通過拚點" +
         (winSkill.isDodge ? "（成功閃躲，攻擊無法命中；硬幣未損失 → 本回合還能繼續擋）" : "（防禦成功）"));
-      if (winSkill.onHit) winSkill.onHit({ self: winner, target: loser, events: events, S: S });
+      if (winSkill.onHit) {
+        yield* global.Effects.call(winSkill.onHit, global.Effects.makeCtx({
+          self: winner, target: loser, skill: winSkill,
+          battle: battle, events: events, runtime: (winIsA ? useA : useB).runtime
+        }));
+      }
+      // 防禦技拚贏也算「使用完成」→ 跑 [使用後]（旭的閃躲要在這裡扣專注力）
+      yield* runSkillAfterUse(winner, loser, winSkill, winIsA ? useA : useB, battle, events);
+    }
+
+    // 技能層級的 [拚點拚輸時]（和真技能A：給攻擊自己的敵方 2 層恍惚）
+    if (loseSkill.onClashLose) {
+      yield* global.Effects.call(loseSkill.onClashLose, global.Effects.makeCtx({
+        self: loser, target: winner, skill: loseSkill,
+        battle: battle, events: events, runtime: (winIsA ? useB : useA).runtime
+      }));
     }
 
     // 碎幣追加攻擊：只有拚輸方觸發
@@ -695,6 +839,14 @@
     if (loseSkill.isDodge) {
       events.push("⚠ " + loser.name + " 閃躲失敗，硬幣損失持續到回合結束 → 本回合剩下的攻擊都會命中");
     }
+
+    // 結月被動4：「拚點失敗時」給帶〈櫻之香〉的友方 1 層迅捷、自己吃 1 層綁縛
+    if (global.Passives && global.Passives.fire) {
+      yield* global.Passives.fire(loser, "onClashLose", battle, events,
+        { opponentId: winner.id, skillId: loseSkill.id });
+    }
+    yield* afterSkillResolved(winner, battle, events);
+    yield* afterSkillResolved(loser, battle, events);
   }
 
   // ---------------- 階段二的宣告輔助 ----------------
@@ -714,12 +866,17 @@
       skillName: sk ? sk.name : drawn.skillId,
       skillType: sk ? sk.type : "attack",
       isDodge: !!(sk && sk.isDodge), isGuard: !!(sk && sk.isGuard),
+      // "ally" → 這把技能以友方為對象（和真技能A）：宣告時要選「治療誰」，
+      // 而 targetId 留給「若有敵人攻擊我，要跟哪一個拚點」（裁決 35，可留空＝任何人）
+      targetSide: sk && sk.targetSide ? sk.targetSide : "enemy",
       isRedo: !!isRedo,
-      previous: prev ? { action: prev.action, targetId: prev.targetId, protectId: prev.protectId } : null
+      previous: prev ? { action: prev.action, targetId: prev.targetId, protectId: prev.protectId,
+                         supportId: prev.supportId } : null
     };
     e.declarations.push({
       slotIndex: drawn.slotIndex, skillId: drawn.skillId,
-      action: decl.action, targetId: decl.targetId, protectId: decl.protectId
+      action: decl.action, targetId: decl.targetId, protectId: decl.protectId,
+      supportId: decl.supportId
     });
     if (isRedo && events) {
       const t = battle.entities.find(function (x) { return x.id === decl.targetId; });
@@ -788,7 +945,7 @@
     const opts = (drawn.menuOptions || []).map(function (o) {
       return { id: o.id, name: o.name, kind: o.kind || "attack" };
     });
-    defenseSkills(entity).forEach(function (sk) {
+    freeUseSkills(entity).forEach(function (sk) {
       if (!opts.some(function (o) { return o.id === sk.id; })) {
         opts.push({ id: sk.id, name: sk.name, kind: "defense" });
       }
@@ -823,7 +980,7 @@
         return {
           entityId: e.id, entityName: e.name, isPC: !!e.isPC,
           slots: e.slots || 0, used: used, free: Math.max(0, (e.slots || 0) - used),
-          hasDefenseSkill: defenseSkills(e).length > 0
+          hasDefenseSkill: freeUseSkills(e).length > 0
         };
       });
   }
@@ -843,6 +1000,7 @@
         const sk = findSkill(e, drawn.skillId);
         const d = (e.declarations || []).find(function (x) { return x.slotIndex === drawn.slotIndex; });
         const tgt = d && byId[d.targetId], pro = d && byId[d.protectId];
+        const sup = d && byId[d.supportId];
         rows.push({
           entityId: e.id, entityName: e.name, isPC: !!e.isPC,
           dex: S.effectiveDex(e),
@@ -856,6 +1014,9 @@
           targetName: tgt ? tgt.name : null,
           protectId: d ? d.protectId : null,
           protectName: pro ? pro.name : null,
+          supportId: d ? d.supportId : null,
+          supportName: sup ? sup.name : null,
+          targetSide: sk && sk.targetSide ? sk.targetSide : "enemy",
           canRechoose: rechooseOptions(e, drawn).length > 1,
           batched: !!(d && d.batched),
           autoRolled: !!drawn.autoRolled,
@@ -935,7 +1096,7 @@
         const e = battle.entities.find(function (x) { return x.id === ans.addAction.entityId; });
         if (e) {
           const idx = nextFreeSlotIndex(e);
-          const defs = defenseSkills(e).map(function (sk) { return { id: sk.id, name: sk.name, kind: "defense" }; });
+          const defs = freeUseSkills(e).map(function (sk) { return { id: sk.id, name: sk.name, kind: "defense" }; });
           if (idx === null) {
             events.push("⚠ " + e.name + " 沒有空閒槽位（共 " + (e.slots || 0) + " 槽、已用 " +
               (e.drawnSkills || []).length + "），無法新增行動");
@@ -994,6 +1155,8 @@
         if (entry._resolved) continue;
         entry._resolved = true;
         yield* resolveEntry(battle, entry, events);
+        // 被動自動發動的額外攻擊要「立刻」打出去（威爾的援護射擊）
+        yield* drainInvocations(battle, events);
       }
     }
     // 保險：任何未被 turnOrder 涵蓋的殘留配對（例如已倒下者的宣告）
@@ -1001,14 +1164,15 @@
       if (entry._resolved) continue;
       entry._resolved = true;
       yield* resolveEntry(battle, entry, events);
+      yield* drainInvocations(battle, events);
     }
 
     // 階段六
     events.push("【階段六】回合結束");
-    runTurnEndPhase(battle.entities, events, {
-      runTurnEndPassives: function (alive, ev) {
+    yield* runTurnEndPhase(battle.entities, events, {
+      runTurnEndPassives: function* (alive, ev) {
         if (global.Passives && global.Passives.runTurnEnd) {
-          global.Passives.runTurnEnd(alive, battle, ev);
+          yield* global.Passives.runTurnEnd(alive, battle, ev);
         }
       }
     });
@@ -1029,6 +1193,10 @@
       resetDodgeRuntime(e);
     });
     if (events) events.push("===== 戰鬥輪 " + battle.roundNumber + " 開始（全體專注力歸 0）=====");
+    // 戰鬥輪開始的被動（威爾的彈匣回滿 9 發、和真的秘方藥補回 5 層）
+    if (global.Passives && global.Passives.runBattleRoundStart) {
+      global.Passives.runBattleRoundStart(battle, events || []);
+    }
   }
   Turn.startBattleRound = startBattleRound;
 

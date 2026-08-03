@@ -206,4 +206,49 @@
   }
   Damage.resolveGuard = resolveGuard;
 
+  /**
+   * 「以友方為目標、不造成傷害」的技能結算（和真的技能A：外科醫生的堅定守護）。
+   * 逐枚擲幣並跑效果鉤子，但完全不結算傷害。
+   *
+   * ⚠ 「命中」的定義（裁決 33）：該枚硬幣有打出去就算，正反面都算
+   *    → 每一枚未損失的硬幣都會跑 onHit／afterHit；onHead 只有正面才跑。
+   *    這正好把「[硬幣正面時]」與「[命中時]」兩種措辭區分開來。
+   */
+  function* resolveSupport(actor, ally, skill, coinRuntime, opts) {
+    opts = opts || {};
+    const events = [];
+    const E = global.Effects;
+    const fx = opts.fx || null;
+    const runtime = fx ? fx.runtime : null;
+
+    const rollable = coinRuntime.filter(function (c) { return c.status !== C.LOST; });
+    const prob = S.headsProbability(actor.focus);
+    events.push("《" + skill.name + "》" + actor.name + " → " + (ally ? ally.name : "（無對象）") +
+      "：不造成傷害，逐枚結算 " + rollable.length + " 枚硬幣");
+
+    function mkCtx(coin, extra) {
+      return E.makeCtx(Object.assign({
+        self: actor, target: ally, skill: skill, battle: fx ? fx.battle : null,
+        events: events, runtime: runtime, coinIndex: coin.index, coin: coin
+      }, extra || {}));
+    }
+
+    for (let i = 0; i < rollable.length; i++) {
+      if (runtime && runtime.stop) break;
+      const coin = rollable[i];
+      const ce = fx ? E.coinEffect(skill, coin.index) : null;
+      if (ce && ce.onUse) {
+        yield* E.call(ce.onUse, mkCtx(coin));
+        if (runtime && runtime.stop) break;
+      }
+      const isHead = (opts.rng || Math.random)() < prob;
+      events.push("　第 " + (i + 1) + " 枚：" + (isHead ? "正面" : "反面") + "（反面照樣算命中）");
+      if (ce && isHead && ce.onHead) yield* E.call(ce.onHead, mkCtx(coin, { isHead: true }));
+      if (ce && ce.onHit) yield* E.call(ce.onHit, mkCtx(coin, { isHead: isHead }));
+      if (ce && ce.afterHit) yield* E.call(ce.afterHit, mkCtx(coin, { isHead: isHead }));
+    }
+    return { events: events };
+  }
+  Damage.resolveSupport = resolveSupport;
+
 })(window);

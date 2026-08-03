@@ -167,6 +167,32 @@
         msgs.forEach(function (m) { events.push(m); });
         return msgs;
       },
+      /**
+       * 施加一次【震顫爆發】，並自動廣播給全場被動。
+       * 角色資料一律用這個，不要直接呼叫 States.tremorBurst —— 否則
+       * 威爾的槍械破甲與援護射擊不會被觸發。
+       * opts.keepLevel：此次爆發不歸零震顫級數（旭技能D 前三枚）
+       */
+      tremorBurst: function (target, opts) {
+        const lv = global.States.tremorBurst(target, events, opts);
+        const P = global.Passives;
+        if (P && P.broadcastTremorBurst) {
+          // ⚠ 就算 lv === 0（爆發落空）也要廣播 —— 裁決 7／16
+          P.broadcastTremorBurst(o.battle, self, target, lv, o.skill, events);
+        }
+        return lv;
+      },
+      /** 記帳式臨時增益（結月的爆裂綻放、旭給敵人的傷害弱化）。 */
+      grant: function (target, key, name, layer, level) {
+        return global.States.grant(self, target, key, name, layer, level, events);
+      },
+      revoke: function (key) {
+        return global.States.revoke(self, o.battle, key, events);
+      },
+      /** 把效果記在別人身上、之後才結算（和真被動4 的守護債務）。 */
+      debt: function (target, debt) {
+        return global.States.addPendingDebt(target, debt);
+      },
       // 中止這把技能剩餘硬幣的傷害結算
       stop: function (reason) {
         (o.runtime || {}).stop = true;

@@ -96,6 +96,8 @@
       onUse: o.onUse || null,             // function(ctx) 技能層級 [使用時]（拚點之前，可改威力）
       onHit: o.onHit || null,             // function(ctx) 整把技能的硬幣都跑完之後
       afterUse: o.afterUse || null,       // function*(ctx) [使用後]；設 ctx.runtime.repeat 可要求重複使用
+      onClashLose: o.onClashLose || null, // function(ctx) [拚點拚輸時]（ctx.target = 贏的那一方）
+      targetSide: o.targetSide || null,   // "ally" → 以友方為對象（和真技能A）；預設打敵方
       text: o.text || "",                 // ★ 技能文本：角卡上的原文，桌邊查詢用（顯示在角色詳情浮窗）
       notes: o.notes || ""                //   設計備註：給設計者看的，與 text 分開顯示
     };
@@ -264,43 +266,440 @@
   };
 
   // ============================================================
-  // 四名 PC（骨架 —— 技能組待補）
-  // 定位摘要來自 trpg-character-design skill 的 party-context。
-  // 補資料時：① 依角卡對照表換算基威/幣威/硬幣數 ② 被動邏輯寫進 engine/passives.js
-  //          ③ 這裡只放 passive ID 與 tuning 數字 ④ 用 character-design skill 做平衡檢查
+  // 四名 PC
+  // ------------------------------------------------------------
+  // 數值來自使用者提供的角卡，已是換算完的最終值（我逐項對過對照表，全部自洽）。
+  // 被動邏輯在 engine/passives.js（具名函式），這裡只放 passive ID 與 tuning 數字。
+  // 逐枚硬幣的效果鉤子見 engine/effects.js 的說明。
+  //
+  // 結算順序（有效 DEX）：旭 90 > 威爾 65 > 結月 60 > 和真 50
+  // ⚠ 震顫是旭／威爾／結月三人的共用資源，引爆會清空級數 —— 出招順序要協調。
   // ============================================================
-  const PC_TEMPLATES = [
-    {
-      id: "pc_yuzuki", name: "夜櫻結月", isPC: true, hp: 60, dex: 12,
-      attributes: { STR: 50, INT: 75, CON: 50, SIZ: 50, LUK: 50 },
-      notes: "核心：囤【虛弱】→《爆裂綻放》兌換成凝神／傷害強化／強壯。純傷害爆發，全被動（靠《櫻之香》集滿）。原始數值最高（高 INT → 幣威 +9），爆發週期固定約 4 回合、無法加速。",
-      tuning: { /* 例：綻放門檻、每回合虛弱收入 */ },
-      passives: []
+
+  // 逐枚 [使用時] 消耗子彈；不足 → 停止該技能的傷害結算（威爾被動1）
+  function ammoUse(n) {
+    return function (ctx) {
+      const key = ctx.tuning.ammoKey || "子彈";
+      if (!ctx.spend(ctx.self, key, n, "《" + ctx.skill.name + "》消耗" + key)) {
+        ctx.stop(ctx.self.name + " 的" + key + "不足 " + n + " 發 → 無法使用該硬幣，停止本技能的傷害結算");
+      }
+    };
+  }
+  // 對目標施加【震顫】
+  function tremor(layer, level) {
+    return function (ctx) { ctx.apply(ctx.target, "震顫", layer, level); };
+  }
+  // 引爆目標的【震顫】（走 ctx.tremorBurst 才會廣播給威爾的破甲與援護射擊）
+  function burst(opts) {
+    return function (ctx) { ctx.tremorBurst(ctx.target, opts); };
+  }
+
+  // ------------------------------------------------------------
+  // 威爾‧賽爾弗特 —— 彈匣驅動，鋪震顫級數 ＋ 引爆
+  // ------------------------------------------------------------
+  const PC_WILL = {
+    id: "pc_will", name: "威爾‧賽爾弗特", isPC: true,
+    hp: 220, dex: 65,
+    attributes: { STR: 80, INT: 55, CON: 55, SIZ: 55, LUK: 65 },
+    sheet: { 力量: 80, 敏捷: 65, 意志: 55, 體質: 55, 外貌: 80, 教育: 60, 體型: 55, 智力: 55, 幸運: 65 },
+    resources: { "子彈": 9 }, resourceMax: { "子彈": 9 },
+    passives: ["will_magazine", "will_quickload", "will_pierce", "will_support"],
+    tuning: {
+      ammoKey: "子彈", magazineMax: 9,
+      quickReloadFocusCost: 10, quickReloadAmount: 8, quickReloadThreshold: 1,
+      supportSkillId: "w_a", supportShotCost: 1,
+      cRepeatAmmoThreshold: 2,
+      cTremorPerStep: 4, cTremorBonusPerStep: 2, cTremorBonusCap: 5,
+      cFragileBonusPerLayer: 1, cFragileBonusCap: 5
     },
-    {
-      id: "pc_akira", name: "渡邊旭", isPC: true, hp: 65, dex: 14,
-      attributes: { STR: 70, INT: 50, CON: 60, SIZ: 55, LUK: 50 },
-      notes: "核心：囤《勁足》→ 門檻歸零換取特殊技能「肉斬骨斷」。定位混亂值推升（控場），半被動。",
-      tuning: { /* 例：勁足門檻、歸零時解鎖的技能 id */ },
-      passives: []
+    slotMap: { A: "w_a", B: "w_b", C: "w_c" },
+    skillLibrary: [
+      { id: "w_a", name: "隱・無光伴星", basePower: 5, coinPower: 5, coins: ["normal"],
+        coinEffects: [{
+          onUse: ammoUse(1),
+          onHit: tremor(1, 3)
+        }],
+        text: "1 枚硬幣｜基礎威力 5｜硬幣威力 +5\n" +
+          "硬幣1 [使用時] 消耗 1 枚【子彈】\n" +
+          "硬幣1 [命中時] 命中的敵方單位增加 1 層【震顫】層數與 3 級【震顫】級數",
+        notes: "唯一會「鋪層」的招 —— 技能B/C 的級數要靠它先鎖住層數才存得住。也是援護射擊自動發射的那一把。" },
+
+      { id: "w_b", name: "連・戰術疊加", basePower: 5, coinPower: 5,
+        coins: ["normal", "normal", "normal"],
+        coinEffects: [
+          { onUse: ammoUse(1), onHit: tremor(0, 3) },
+          { onUse: ammoUse(1), onHit: tremor(1, 4) },
+          { onUse: ammoUse(1), onHit: tremor(1, 5), afterHit: burst() }
+        ],
+        text: "3 枚硬幣｜基礎威力 5｜硬幣威力 +5\n" +
+          "硬幣1 [使用時] 消耗 1 枚【子彈】／[命中時] 增加 3 級【震顫】級數\n" +
+          "硬幣2 [使用時] 消耗 1 枚【子彈】／[命中時] 增加 1 層【震顫】層數與 4 級【震顫】級數\n" +
+          "硬幣3 [使用時] 消耗 1 枚【子彈】／[命中時] 增加 1 層【震顫】層數與 5 級【震顫】級數\n" +
+          "　　　[命中後] 對命中的敵方單位施加 1 次【震顫爆發】",
+        notes: "⚠ 硬幣1 只給級數不給層 → 對「乾淨」的目標那 3 級會整個蒸發（裁決 6，有意的設計張力）。" +
+          "先用技能A 鋪層，B 的收益才完整。" },
+
+      { id: "w_c", name: "續・追魂彈幕", basePower: 5, coinPower: 5, coins: ["normal"],
+        // [使用時] 的條件式加成：拚點之前算，且「只算一次、全程沿用」（裁決 12）
+        onUse: function (ctx) {
+          const t = ctx.target;
+          if (!t) return;
+          const tr = ctx.S.levelOf(t, "震顫");
+          const fr = ctx.S.layerOf(t, "易損");
+          const cp = Math.min(ctx.tuning.cTremorBonusCap,
+            Math.floor(tr / ctx.tuning.cTremorPerStep) * ctx.tuning.cTremorBonusPerStep);
+          const bp = Math.min(ctx.tuning.cFragileBonusCap, fr * ctx.tuning.cFragileBonusPerLayer);
+          ctx.runtime.coinPowerBonus = cp;
+          ctx.runtime.basePowerBonus = bp;
+          ctx.log("《追魂彈幕》條件式加成：" + t.name + " 震顫 " + tr + " 級 → 幣威 +" + cp +
+            "；易損 " + fr + " 層 → 基威 +" + bp + "（只算一次，重複使用時沿用）");
+        },
+        coinEffects: [{
+          onUse: ammoUse(2),
+          // ⚠ onHead 排在凝神判定之後 → 這枚吃不到，留給後續的重複使用（裁決 14）
+          onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 6); },
+          onHit: tremor(0, 6),
+          afterHit: function (ctx) {
+            ctx.tremorBurst(ctx.target);
+            ctx.apply(ctx.target, "恍惚", 1, 0);
+          }
+        }],
+        // [使用後]：子彈 ≥2 就重新使用。⚠ 只在拚贏／單方面攻擊時才跑（裁決 11）
+        afterUse: function (ctx) {
+          const key = ctx.tuning.ammoKey || "子彈";
+          const need = ctx.tuning.cRepeatAmmoThreshold || 2;
+          if (ctx.resource(ctx.self, key) >= need) {
+            ctx.runtime.repeat = true;
+            ctx.log("《追魂彈幕》剩餘" + key + " " + ctx.resource(ctx.self, key) + " 發（≥" + need + "）→ 重新使用");
+          }
+        },
+        text: "1 枚硬幣｜基礎威力 5｜硬幣威力 +5\n" +
+          "[使用時] 對象每有 4 級【震顫】，硬幣1 的硬幣威力 +2（至多 +5）\n" +
+          "[使用時] 對象每有 1 層【易損】，硬幣1 的基礎威力 +1（至多 +5）\n" +
+          "[使用後] 如果剩餘子彈 ≥ 2，則重新使用此技能\n" +
+          "硬幣1 [使用時] 消耗 2 枚【子彈】\n" +
+          "　　　[硬幣正面時] 對自己施加 1 層【凝神】層數與 6 級【凝神】級數\n" +
+          "　　　[命中時] 增加 6 級【震顫】級數\n" +
+          "　　　[命中後] 施加 1 次【震顫爆發】、施加 1 層【恍惚】",
+        notes: "滿彈 9 發最多連射 4 次（9→7→5→3→1）。快速裝填在整條連鎖跑完之前不觸發（裁決 9），" +
+          "否則會變成無限迴圈。拚輸則完全不發動，子彈一發都不扣（裁決 11、13）。" },
+
+      makeGuard(55, 55),   // 基威 3 ← SIZ 55／幣威 +5 ← CON 55
+      makeDodge(65, 65)    // 基威 5 ← 閃避 61–75／幣威 +6 ← LUK 65
+    ],
+    notes: "彈匣驅動的爆發輸出。開場滿彈 9 發，每個戰鬥輪回滿。" +
+      "⚠《援護射擊》沒有次數上限 —— 旭與結月引爆震顫時會自動抽走他的子彈，桌邊要協調出招順序。"
+  };
+
+  // ------------------------------------------------------------
+  // 夜櫻結月 —— 囤【虛弱】換爆發，全被動
+  // ------------------------------------------------------------
+  const PC_YUZUKI = {
+    id: "pc_yuzuki", name: "夜櫻結月", isPC: true,
+    hp: 240, dex: 60,
+    attributes: { STR: 50, INT: 80, CON: 60, SIZ: 60, LUK: 65 },
+    sheet: { 力量: 50, 敏捷: 60, 意志: 80, 體質: 60, 外貌: 85, 教育: 80, 體型: 60, 智力: 80, 幸運: 65 },
+    markMeta: { "櫻之香": { noDecay: true }, "爆裂綻放": { noDecay: true, maxLayer: 1 } },
+    // ⚠ 陣列順序 = 同 kind 內的結算順序：撒香(buff) → 檢查全員(cost) → 綻放(cost) → 級數換層(cost)
+    passives: ["yuzuki_charisma", "yuzuki_composure", "yuzuki_fragrance", "yuzuki_bloom", "yuzuki_command"],
+    tuning: { markKey: "櫻之香", commandThreshold: 20, commandPerLayer: 5, commandMaxLayers: 3 },
+    slotMap: { A: "y_a", B: "y_b", C: "y_c" },
+    skillLibrary: [
+      { id: "y_a", name: "鏡花水月", basePower: 7, coinPower: 9, coins: ["normal", "normal"],
+        coinEffects: [
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 2); } },
+          { onHit: function (ctx) { ctx.apply(ctx.self, "虛弱", 3, 0); }, afterHit: burst() }
+        ],
+        text: "2 枚硬幣｜基礎威力 7｜硬幣威力 +9\n" +
+          "硬幣1 [硬幣正面時] 對自身增加 1 層【凝神】層數與 2 級【凝神】強度\n" +
+          "硬幣2 [命中時] 對自身增加 3 層【虛弱】\n" +
+          "硬幣2 [命中時] 對命中的敵方單位施加 1 次【震顫爆發】",
+        notes: "她唯一的引爆手段 —— ⚠ 會觸發威爾的援護射擊，抽走他 1 發子彈。" },
+
+      { id: "y_b", name: "月影風清", basePower: 7, coinPower: 9,
+        coins: ["normal", "normal", "normal"],
+        coinEffects: [
+          { onHit: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 2); } },
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 2); },
+            onHit: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 0); } },
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 2); },
+            onHit: function (ctx) {
+              ctx.apply(ctx.self, "虛弱", 3, 0);
+              ctx.apply(ctx.self, "凝神", 1, 0);
+            } }
+        ],
+        text: "3 枚硬幣｜基礎威力 7｜硬幣威力 +9\n" +
+          "硬幣1 [命中時] 對自身增加 2 級【凝神】強度\n" +
+          "硬幣2 [硬幣正面時] +2 級／[命中時] +1 層【凝神】層數\n" +
+          "硬幣3 [硬幣正面時] +2 級／[命中時] 對自身增加 3 層【虛弱】、+1 層【凝神】層數",
+        notes: "⚠ 每一枚的 [正面時] 級數都排在 [命中時] 給層之前 → 沒有凝神層數時第一筆級數必定蒸發（裁決 18）。" },
+
+      { id: "y_c", name: "月落星沉", basePower: 7, coinPower: 9,
+        coins: ["normal", "normal", "normal"],
+        coinEffects: [
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 3); },
+            onHit: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 0); } },
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 4); },
+            onHit: function (ctx) { ctx.apply(ctx.self, "凝神", 1, 0); } },
+          { onHead: function (ctx) { ctx.apply(ctx.self, "凝神", 0, 5); },
+            onHit: function (ctx) { ctx.apply(ctx.self, "凝神", 2, 0); } }
+        ],
+        text: "3 枚硬幣｜基礎威力 7｜硬幣威力 +9\n" +
+          "硬幣1 [硬幣正面時] +3 級／[命中時] +1 層【凝神】\n" +
+          "硬幣2 [硬幣正面時] +4 級／[命中時] +1 層【凝神】\n" +
+          "硬幣3 [硬幣正面時] +5 級／[命中時] +2 層【凝神】",
+        notes: "堆凝神的主力。凝神級數超過 20 之後由《乘勝指揮》換成層數（層數＝可觸發次數）。" },
+
+      { id: "guard", name: "防守", type: "defense", isGuard: true,
+        basePower: 3, coinPower: 5, coins: ["normal"],
+        // ⚠ 裁決 24：先 +4 層虛弱，再用「加完的總層數」算幣威加成，且加成無上限
+        onUse: function (ctx) {
+          ctx.apply(ctx.self, "虛弱", 4, 0);
+          const w = ctx.S.layerOf(ctx.self, "虛弱");
+          ctx.runtime.coinPowerBonus = Math.floor(w / 3);
+          ctx.log("《防守》【虛弱】" + w + " 層 → 幣威 +" + ctx.runtime.coinPowerBonus + "（無上限）");
+        },
+        afterUse: function (ctx) { ctx.apply(ctx.self, "凝神", 2, 0); },
+        text: "1 枚硬幣｜基礎威力 3｜硬幣威力 +5\n" +
+          "[使用時] 對自身增加 4 層【虛弱】\n" +
+          "[使用時] 自身每有 3 層【虛弱】，防守的硬幣威力增加 1\n" +
+          "增加 最終威力 ×5 的臨時生命值。\n" +
+          "[使用後] 對自身增加 2 層【凝神】層數",
+        notes: "⚠【虛弱】只影響攻擊型技能，不影響防守（裁決 17）→ 囤貨越多，她的防守反而越硬。" +
+          "同時也是她「囤虛弱＋鎖凝神層」的主要引擎。" },
+
+      makeDodge(25, 65)    // 基威 1 ← 閃避 ≤30／幣威 +6 ← LUK 65
+    ],
+    notes: "純傷害爆發，全被動。約每 3 回合觸發一次《爆裂綻放》（除自己外 3 名 PC，每回合撒 1 人）。" +
+      "⚠ 閃避技能 ≤30 → 閃躲基威只有 1，她幾乎閃不掉。"
+  };
+
+  // ------------------------------------------------------------
+  // 渡邊旭 —— 囤〈勁足〉換《肉斬骨斷》，控場／收割
+  // ------------------------------------------------------------
+  const PC_AKIRA = {
+    id: "pc_akira", name: "渡邊旭", isPC: true,
+    hp: 240, dex: 90,
+    attributes: { STR: 50, INT: 70, CON: 75, SIZ: 50, LUK: 85 },
+    sheet: { 力量: 50, 敏捷: 90, 意志: 50, 體質: 75, 外貌: 50, 教育: 75, 體型: 50, 智力: 70, 幸運: 85 },
+    markMeta: { "勁足": { noDecay: true } },
+    // ⚠ 順序：勁足(buff) → 殺手本位(buff) → 振刀(cost，歸零) → 望月思鄉(cost，回合結束)
+    passives: ["akira_stride", "akira_killer", "akira_vibrate", "akira_homesick"],
+    tuning: {
+      strideKey: "勁足", stridePerTurn: 2, stridePerSwift: 3,
+      killerGuardAt: 5, killerGuard: 3,
+      killerAmpAt: 10, killerAmp: 3,
+      killerWeakenAt: 15, killerWeaken: 3,
+      homesickSwift: 4, homesickGuard: 2, homesickAmp: 2,
+      vibrateThreshold: 17, vibrateSkillId: "a_d",
+      dodgeBaseBonusCap: 4, dodgeFocusCostCap: 10
     },
-    {
-      id: "pc_will", name: "威爾‧賽爾弗特", isPC: true, hp: 55, dex: 13,
-      attributes: { STR: 50, INT: 72, CON: 50, SIZ: 50, LUK: 55 },
-      notes: "核心：彈匣【子彈】驅動，鋪震顫層數＋引爆。開場即滿檔但每兩回合要停下換彈。《援護射擊》= 隊友觸發震顫爆發時自動發射技能A ⚠ 屬「玩家無法拒絕」→ 需次數上限（見 tuning.supportShotsPerTurn）。",
-      resources: { "子彈": 6 }, resourceMax: { "子彈": 6 },
-      tuning: { ammoKey: "子彈", supportShotsPerTurn: 1, supportShotCost: 1, supportSkillId: null },
-      passives: []
+    slotMap: { A: "a_a", B: "a_b", C: "a_c" },
+    skillLibrary: [
+      { id: "a_a", name: "前哨試探", basePower: 7, coinPower: 4, coins: ["normal", "normal"],
+        coinEffects: [
+          { onHit: tremor(1, 3) },
+          { onHit: tremor(0, 3) }
+        ],
+        text: "2 枚硬幣｜基礎威力 7｜硬幣威力 +4\n" +
+          "硬幣1 [命中時] 增加 1 層【震顫】層數與 3 級【震顫】級數\n" +
+          "硬幣2 [命中時] 增加 3 級【震顫】級數" },
+
+      { id: "a_b", name: "連鎖壓迫", basePower: 7, coinPower: 4,
+        coins: ["normal", "normal", "normal"],
+        coinEffects: [
+          { onHit: tremor(1, 4) },
+          { onHit: tremor(0, 6) },
+          { onHit: function (ctx) {
+              ctx.apply(ctx.target, "震顫", 0, 8);
+              ctx.apply(ctx.self, "勁足", 1, 0, { isMark: true, noDecay: true });
+            } }
+        ],
+        text: "3 枚硬幣｜基礎威力 7｜硬幣威力 +4\n" +
+          "硬幣1 [命中時] 增加 1 層【震顫】層數與 4 級【震顫】級數\n" +
+          "硬幣2 [命中時] 增加 6 級【震顫】級數\n" +
+          "硬幣3 [命中時] 增加 8 級【震顫】級數、對自身施加 1 層〈勁足〉" },
+
+      { id: "a_c", name: "終局共震", basePower: 7, coinPower: 4,
+        coins: ["normal", "normal", "normal"],
+        coinEffects: [
+          { onHit: tremor(1, 5) },
+          { onHit: function (ctx) {
+              ctx.apply(ctx.target, "震顫", 1, 7);
+              ctx.apply(ctx.self, "勁足", 1, 0, { isMark: true, noDecay: true });
+            } },
+          { onHit: function (ctx) {
+              ctx.apply(ctx.target, "震顫", 0, 9);
+              ctx.apply(ctx.self, "勁足", 1, 0, { isMark: true, noDecay: true });
+            },
+            afterHit: burst() }
+        ],
+        text: "3 枚硬幣｜基礎威力 7｜硬幣威力 +4\n" +
+          "硬幣1 [命中時] 增加 1 層【震顫】層數與 5 級【震顫】級數\n" +
+          "硬幣2 [命中時] 增加 1 層與 7 級、對自身施加 1 層〈勁足〉\n" +
+          "硬幣3 [命中時] 增加 9 級、對自身施加 1 層〈勁足〉\n" +
+          "　　　[命中時] 對命中的敵方單位施加 1 次【震顫爆發】",
+        notes: "⚠ 會觸發威爾的援護射擊。" },
+
+      { id: "a_d", name: "肉斬骨斷", basePower: 16, coinPower: 1,
+        drawable: false,   // 只能由《振刀》解鎖（本回合限定、不受抽選限制）
+        coins: ["normal", "normal", "red", "red"],
+        coinEffects: [
+          { onUse: tremor(2, 1), afterHit: burst({ keepLevel: true }) },
+          { onUse: tremor(1, 1), afterHit: burst({ keepLevel: true }) },
+          { onUse: tremor(2, 1), afterHit: burst({ keepLevel: true }) },
+          { onUse: tremor(1, 1), afterHit: burst() }
+        ],
+        afterUse: function (ctx) {
+          ctx.apply(ctx.self, "勁足", 4, 0, { isMark: true, noDecay: true });
+        },
+        text: "4 枚硬幣｜基礎威力 16｜硬幣威力 +1（硬幣3、4 為紅色硬幣）\n" +
+          "硬幣1 [使用時] 增加 2 層【震顫】層數與 1 級／[命中時] 施加【震顫爆發】，此次不歸零級數\n" +
+          "硬幣2 [使用時] 增加 1 層與 1 級／[命中時] 施加【震顫爆發】，此次不歸零級數\n" +
+          "硬幣3 [使用時] 增加 2 層與 1 級／[命中時] 施加【震顫爆發】，此次不歸零級數\n" +
+          "硬幣4 [使用時] 增加 1 層與 1 級／[命中時] 施加【震顫爆發】\n" +
+          "　　　[使用後] 對自身施加 4 層〈勁足〉",
+        notes: "收割技，不是傷害技（基威 16、幣威 +1，四下打不痛）—— 它的價值是把混亂值一口氣推上去。" +
+          "前三枚不歸零級數 → 同一筆級數連炸四次。[使用時] 共給 6 層震顫、四次爆發 −4 層，淨 +2 剛好撐完。" +
+          "⚠ 拚輸則 17 層勁足白費（裁決 30）。⚠ 四次爆發會觸發威爾的援護射擊四次。" },
+
+      { id: "guard", name: "防守", type: "defense", isGuard: true,
+        basePower: 3, coinPower: 9, coins: ["normal"],
+        afterUse: function (ctx) {
+          ctx.apply(ctx.self, "勁足", 1, 0, { isMark: true, noDecay: true });
+        },
+        text: "1 枚硬幣｜基礎威力 3｜硬幣威力 +9\n" +
+          "增加 最終威力 ×5 的臨時生命值。\n" +
+          "[使用後] 對自身施加 1 層〈勁足〉" },
+
+      { id: "dodge", name: "閃躲", type: "defense", isDodge: true,
+        basePower: 5, coinPower: 12, coins: ["normal"],
+        // ⚠ 裁決 26：加的是「基礎威力」，上限 +4（文本括號寫「硬幣威力」是筆誤）
+        // ⚠ 裁決 32：每擋一次就各觸發一次，兩邊都有每回合累計上限
+        onUse: function (ctx) {
+          const c = ctx.self._turnCounters = ctx.self._turnCounters || {};
+          const cap = ctx.tuning.dodgeBaseBonusCap || 4;
+          const want = Math.floor(ctx.S.layerOf(ctx.self, "勁足") / 2);
+          const give = Math.max(0, Math.min(want, cap - (c.dodgeBaseBonus || 0)));
+          c.dodgeBaseBonus = (c.dodgeBaseBonus || 0) + give;
+          ctx.runtime.basePowerBonus = give;
+          if (give) ctx.log("《閃躲》〈勁足〉加成 → 基威 +" + give + "（本回合累計 " + c.dodgeBaseBonus + "／" + cap + "）");
+        },
+        afterUse: function (ctx) {
+          const c = ctx.self._turnCounters = ctx.self._turnCounters || {};
+          const cap = ctx.tuning.dodgeFocusCostCap || 10;
+          const want = Math.floor(ctx.S.layerOf(ctx.self, "勁足") / 2) * 4;
+          const pay = Math.max(0, Math.min(want, cap - (c.dodgeFocusCost || 0)));
+          c.dodgeFocusCost = (c.dodgeFocusCost || 0) + pay;
+          if (pay) ctx.addFocus(ctx.self, -pay, "《閃躲》的代價");
+        },
+        text: "1 枚硬幣｜基礎威力 5｜硬幣威力 +12\n" +
+          "[使用前]〈勁足〉每有 2 層，基礎威力 +1（一回合內至多 +4）\n" +
+          "躲過敵方單位的攻擊，使其無法命中。\n" +
+          "[使用後]〈勁足〉每有 2 層，專注力 −4（一回合內至多 −10）",
+        notes: "幸運 85 → 幣威 +12，全隊最會閃。但囤勁足時每擋一次都要付專注力。" }
+    ],
+    notes: "全隊最快（DEX 90）。鋪震顫級數的主力，累到 17 層〈勁足〉觸發《振刀》換《肉斬骨斷》收割。" +
+      "被動2 與被動4 的加減剛好淨 0（守護／傷害強化／迅捷三條都是），所以增益穩定維持不會累積。"
+  };
+
+  // ------------------------------------------------------------
+  // 霧島和真 —— 《仁心》驅動治療與急救，補師／減益
+  // ------------------------------------------------------------
+  const PC_KAZUMA = {
+    id: "pc_kazuma", name: "霧島和真", isPC: true,
+    hp: 260, dex: 50,
+    attributes: { STR: 85, INT: 60, CON: 75, SIZ: 60, LUK: 60 },
+    sheet: { 力量: 85, 敏捷: 50, 意志: 85, 體質: 75, 外貌: 55, 教育: 85, 體型: 60, 智力: 60, 幸運: 60 },
+    markMeta: {
+      "仁心": { noDecay: true, maxLayer: 4 },
+      "茶乃的秘方藥": { noDecay: true, maxLayer: 5 }
     },
-    {
-      id: "pc_kazuma", name: "霧島和真", isPC: true, hp: 58, dex: 11,
-      attributes: { STR: 45, INT: 65, CON: 55, SIZ: 50, LUK: 60 },
-      notes: "核心：《仁心》驅動治療、《茶乃的秘方藥》自救。補師／減益／專注力，全被動，約 R4–R5 進入完全體。⚠ 仁心是互斥資源：治療與急救（救混亂隊友）共用，急救需滿額。",
-      resources: { "仁心": 0 }, resourceMax: { "仁心": 10 },
-      tuning: { /* 例：仁心每回合收入、急救門檻 */ },
-      passives: []
-    }
-  ];
+    passives: ["kazuma_perception", "kazuma_benevolence", "kazuma_chano",
+               "kazuma_hippocrates", "kazuma_adrenaline"],
+    tuning: {
+      benevolenceKey: "仁心", benevolenceMax: 4,
+      firstAidCost: 4, firstAidGuard: 10, adrenalineLayers: 2, adrenalineDebt: 8,
+      medicineKey: "茶乃的秘方藥", medicineMax: 5,
+      medicineHealCost: 1, medicineHpTrigger: 0.5, medicineHealPct: 0.15,
+      medicineUnstunCost: 3, medicineFocusSet: 30
+    },
+    slotMap: { A: "k_a", B: "k_b", C: "k_c" },
+    skillLibrary: [
+      { id: "k_a", name: "外科醫生的堅定守護", type: "defense", targetSide: "ally",
+        basePower: 3, coinPower: 9, coins: ["normal", "normal"],
+        coinEffects: [
+          { // ⚠ [使用時] 的仁心消耗放在逐枚鉤子 → 只有技能真的跑起來才扣（裁決 36：拚輸不扣）
+            onUse: function (ctx) { ctx.apply(ctx.self, "仁心", -1, 0); },
+            onHead: function (ctx) {
+              if (ctx.self.focus < 25) return;
+              const n = ctx.S.layerOf(ctx.self, "仁心");
+              ctx.allies(false).forEach(function (a) { ctx.addFocus(a, n, "《堅定守護》"); });
+              ctx.addFocus(ctx.self, -n * 2, "《堅定守護》的代價");
+            } },
+          { // ⚠ 反面也算命中（裁決 33）
+            onHit: function (ctx) {
+              const ally = ctx.target;
+              if (!ally) return;
+              if (ctx.S.layerOf(ally, "檢傷分類") > 0) {
+                ctx.log("《堅定守護》" + ally.name + " 已有〈檢傷分類〉，本次不治療");
+                return;
+              }
+              const n = ctx.S.layerOf(ctx.self, "仁心");
+              ctx.heal(ally, Math.floor(ally.maxHp * (n * 2) / 100), "《堅定守護》");
+            } }
+        ],
+        afterUse: function (ctx) {
+          if (ctx.target) ctx.apply(ctx.target, "檢傷分類", 1, 0, { isMark: true });
+          ctx.apply(ctx.self, "仁心", 1, 0, { isMark: true, noDecay: true, maxLayer: 4 });
+        },
+        onClashLose: function (ctx) { ctx.apply(ctx.target, "恍惚", 2, 0); },
+        text: "2 枚硬幣｜基礎威力 3｜硬幣威力 +9\n" +
+          "此技能視為特殊的防禦型技能，不會造成傷害，但霧島和真被敵方攻擊型技能作為對象時，" +
+          "需要先和該敵方單位拚點，拚點成功才能繼續使用此技能（拚點輸贏仍影響專注力）。" +
+          "僅能以自己以外的友方單位作為對象。\n" +
+          "[拚點拚輸時] 對攻擊自己的敵方單位施加 2 層【恍惚】\n" +
+          "[使用時] 減少 1 層〈仁心〉\n" +
+          "硬幣1 [硬幣正面時] 若自身專注力 ≥ 25，全體友方回復等同〈仁心〉層數的專注力，" +
+          "自身減少〈仁心〉層數 ×2 的專注力\n" +
+          "硬幣2 [命中時] 若對象的〈檢傷分類〉為 0，回復（對象生命上限 ×〈仁心〉層數 ×2%）的生命值\n" +
+          "　　　[使用後] 對對象施加 1 層〈檢傷分類〉、對自身施加 1 層〈仁心〉",
+        notes: "⚠ 它是防禦型，但佔著 slotMap 的 A 槽位 → 受 1d6 抽選限制（裁決 34），" +
+          "不像【防守】【閃躲】那樣想用就能用。〈檢傷分類〉每回合 −1，所以同一人隔一回合才能再治療。" },
+
+      { id: "k_b", name: "不務正業的手術刀", basePower: 3, coinPower: 9,
+        coins: ["normal", "normal"],
+        coinEffects: [
+          { onHead: tremor(1, 2) },
+          { onHead: tremor(1, 3) }
+        ],
+        text: "2 枚硬幣｜基礎威力 3｜硬幣威力 +9\n" +
+          "硬幣1 [硬幣正面時] 對命中的敵方單位增加 1 層【震顫】層數與 2 級【震顫】級數\n" +
+          "硬幣2 [硬幣正面時] 對命中的敵方單位增加 1 層【震顫】層數與 3 級【震顫】級數",
+        notes: "他只鋪不引爆 —— 級數留給旭與威爾去炸。" },
+
+      { id: "k_c", name: "無奈的緊急麻醉", basePower: 3, coinPower: 9, coins: ["normal"],
+        coinEffects: [{
+          onHead: function (ctx) {
+            ctx.apply(ctx.target, "易損", 3, 0);
+            ctx.apply(ctx.target, "傷害弱化", 3, 0);
+          },
+          onHit: function (ctx) { ctx.apply(ctx.self, "守護", 3, 0); }
+        }],
+        text: "1 枚硬幣｜基礎威力 3｜硬幣威力 +9\n" +
+          "硬幣1 [硬幣正面時] 對命中的敵方單位增加 3 層【易損】與 3 層【傷害弱化】\n" +
+          "　　　[命中時] 對自身施加 3 層【守護】",
+        notes: "純減益技。【易損】也回頭強化威爾技能C 的基礎威力。" },
+
+      makeGuard(60, 75),   // 基威 3 ← SIZ 60／幣威 +9 ← CON 75
+      makeDodge(25, 60)    // 基威 1 ← 閃避 ≤30／幣威 +5 ← LUK 60
+    ],
+    notes: "全隊最慢（DEX 50）→ 他的治療永遠在最後才發生。" +
+      "⚠《仁心》上限 4、每回合只 +1 → 急救（消耗 4 層）大約每 4 回合才有一次。" +
+      "三把技能的幣威 +9 對應 CON 75（非表格的 STR/INT），使用者給的是最終值。"
+  };
+
+  const PC_TEMPLATES = [PC_WILL, PC_YUZUKI, PC_AKIRA, PC_KAZUMA];
 
   // ============================================================
   // 藍圖 → 戰場實例
@@ -365,9 +764,13 @@
     preview: preview,
 
     // --- PC 名單（寫死）---
-    pcRoster: function () { return [entity(cloneSpec(TEST_TARGET_SPEC))]; },
+    pcRoster: function () {
+      return PC_TEMPLATES.map(function (t) { return entity(cloneSpec(t)); });
+    },
     // PC 槽位成長順序（戰鬥輪開始前由 KP 指定；預設照名單順序）
-    pcGrowthOrder: function () { return ["test_target"]; },
+    pcGrowthOrder: function () { return PC_TEMPLATES.map(function (t) { return t.id; }); },
+    // 引擎驗證用的高血量標靶（不在正式名單裡，需要時自己取用）
+    testTarget: function () { return entity(cloneSpec(TEST_TARGET_SPEC)); },
 
     // 四名 PC 骨架（技能組待補）
     PC_TEMPLATES: PC_TEMPLATES,
