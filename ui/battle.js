@@ -23,6 +23,8 @@
     npcSlots: "階段一・回合開始 — NPC 槽位（KP 手填，不做上限檢查）",
     skillDraw1d6: "階段一・回合開始 — 技能抽選（手動輸入 1d6 兩次）",
     chooseSkill: "階段一・回合開始 — 從菜單選一個技能",
+    turnAction: "階段一・回合開始 — 整回合動作（選了就放棄本回合全部槽位）",
+    passiveChoice: "被動觸發 — 需要玩家／KP 決定",
     batchTarget: "階段二・一鍵指定敵方目標（之後仍可逐一訂正）",
     declare: "階段二・宣告與配對",
     confirmPairing: "階段二・KP 確認本回合行動（可改宣告／改技能／新增／刪除）",
@@ -130,6 +132,8 @@
   Battle.ownerOf = ownerOf;
   Battle.isPlayerFillable = function (req) {
     if (!req) return false;
+    // KP 專屬：NPC 槽位、最終配對確認、一鍵指定。
+    // turnAction 與 passiveChoice 屬於「該角色自己的決定」→ 由該 PC 的玩家填（下面的 isPC 判斷）。
     if (req.type === "npcSlots" || req.type === "confirmPairing" || req.type === "batchTarget") return false;
     const id = ownerOf(req);
     if (!id) return false;
@@ -272,11 +276,14 @@
         text: req.name + "《" + req.skillName + "》（" +
           (req.isGuard ? "防守" : req.isDodge ? "閃躲" : req.skillType === "defense" ? "防禦型" : "攻擊型") + "）"
       }));
+      const isSupport = req.targetSide === "ally";
       const actionSel = el("select");
       actionSel.setAttribute("aria-label", "動作");
-      const acts = req.skillType === "defense"
-        ? [["defend", "用來防禦／閃躲"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]]
-        : [["attack", "攻擊"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]];
+      const acts = isSupport
+        ? [["support", "治療／支援友方"]]
+        : req.skillType === "defense"
+          ? [["defend", "用來防禦／閃躲"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]]
+          : [["attack", "攻擊"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]];
       acts.forEach(function (a) { const o = el("option", { text: a[1] }); o.value = a[0]; actionSel.appendChild(o); });
 
       const self = battle.entities.find(function (x) { return x.id === req.entityId; });
@@ -308,6 +315,11 @@
         const act = actionSel.value;
         const prevVal = keepValue !== undefined ? keepValue : targetSel.value;
         targetSel.innerHTML = "";
+        // 治療技：targetId 的語意變成「若有敵人攻擊我，要跟哪一個拚點」（裁決 35）
+        if (isSupport) {
+          const anyOpt = el("option", { text: "（由 KP 當場指定／任何攻擊我的人）" });
+          anyOpt.value = ""; targetSel.appendChild(anyOpt);
+        }
         if (act === "defend") {
           const anyOpt = el("option", { text: "（任何攻擊我的人）" });
           anyOpt.value = ""; targetSel.appendChild(anyOpt);
@@ -328,6 +340,7 @@
         const ic = act === "intercept";
         rProtect.style.display = ic ? "flex" : "none";
         rTarget.querySelector("span").textContent = ic ? "攔誰的攻擊：" :
+          isSupport ? "若被攻擊，跟誰拚點：" :
           act === "defend" ? "應對誰的攻擊：" : "目標／對手：";
       }
       actionSel.onchange = function () { syncTargetOptions(); };
@@ -344,18 +357,92 @@
       }
       syncTargetOptions(restoreTarget);
 
+      // 治療技：另外選「治療誰」（存進 supportId，與拚點對手分開）
+      const supportSel = el("select"); supportSel.setAttribute("aria-label", "治療對象");
+      const rSupport = row([el("span", { text: "治療誰：" }), supportSel]);
+      if (isSupport) {
+        allies.forEach(function (x) {
+          const o = el("option", { text: x.name + "　HP " + x.hp + "／" + x.maxHp });
+          o.value = x.id; supportSel.appendChild(o);
+        });
+        if (!allies.length) {
+          const o = el("option", { text: "（沒有其他存活的友方，這把技能無效）" });
+          o.value = ""; supportSel.appendChild(o);
+        }
+        if (req.isRedo && req.previous && req.previous.supportId) supportSel.value = req.previous.supportId;
+      }
+
       box.appendChild(row([el("span", { text: "動作：" }), actionSel]));
+      if (isSupport) box.appendChild(rSupport);
       box.appendChild(rTarget);
       box.appendChild(rProtect);
+      if (isSupport) {
+        box.appendChild(el("p", {
+          cls: "hint",
+          text: "這是特殊的防禦型技能：不造成傷害，只作用在友方身上。" +
+            "若有敵方指定攻擊使用者，必須先拚贏才能繼續使用（拚輸則改為對該敵人施加【恍惚】）。"
+        }));
+      }
       if (req.isDodge) box.appendChild(el("p", { cls: "hint warn-text", text: "⚠ 閃躲失敗會使硬幣損失持續到回合結束 —— 本回合剩下的攻擊都會命中。" }));
       if (req.isGuard) box.appendChild(el("p", { cls: "hint", text: "防守：增加「最終威力 × 5」的臨時生命值（回合結束的傷害結算完之後才歸零）。" }));
 
       const b = el("button", { cls: "primary", text: "送出宣告" });
       b.type = "button";
       b.onclick = function () {
-        submit({ action: actionSel.value, targetId: targetSel.value, protectId: protectSel.value });
+        submit({
+          action: actionSel.value, targetId: targetSel.value,
+          protectId: protectSel.value,
+          supportId: isSupport ? supportSel.value : undefined
+        });
       };
       box.appendChild(b);
+      return;
+    }
+
+    if (req.type === "turnAction") {
+      box.appendChild(el("h4", { text: req.name + " —— 本回合要不要改做別的事？" }));
+      box.appendChild(el("p", {
+        cls: "hint",
+        text: "⚠ 這裡選了就會放棄本回合的全部槽位（連【防守】【閃躲】都不能用）。" +
+          "問在抽技能之前，是為了避免抽完才發現要做這件事、白抽一輪。"
+      }));
+      const r = el("div", { cls: "row" });
+      req.options.forEach(function (o) {
+        const b2 = el("button", { cls: "warn-btn", text: o.label });
+        b2.type = "button";
+        if (o.hint) b2.title = o.hint;
+        b2.onclick = function () { submit(o.id); };
+        r.appendChild(b2);
+        if (o.hint) box.appendChild(el("p", { cls: "hint", text: "・" + o.label + "：" + o.hint }));
+      });
+      box.appendChild(r);
+      const no = el("button", { cls: "primary", text: "照常行動" });
+      no.type = "button";
+      no.onclick = function () { submit(null); };
+      box.appendChild(row([no]));
+      return;
+    }
+
+    if (req.type === "passiveChoice") {
+      box.appendChild(el("h4", {
+        text: req.name + (req.passiveName ? "〈" + req.passiveName + "〉" : "") + "　" + req.title
+      }));
+      if (req.detail) box.appendChild(el("p", { cls: "hint", text: req.detail }));
+      const r = el("div", { cls: "row" });
+      (req.options || []).forEach(function (o) {
+        const isSuggested = req.suggested && o.id === req.suggested;
+        const b2 = el("button", {
+          cls: isSuggested ? "primary" : "",
+          text: o.label + (isSuggested ? "　◀ 工具隨機挑出" : "")
+        });
+        b2.type = "button";
+        b2.onclick = function () { submit(o.id); };
+        r.appendChild(b2);
+      });
+      box.appendChild(r);
+      if (req.suggested) {
+        box.appendChild(el("p", { cls: "hint", text: "隨機結果由工具擲出，KP 可以覆寫（authoring.md 的擲骰處理表）。" }));
+      }
       return;
     }
 
@@ -394,6 +481,8 @@
         }
         const actionText = r.action === "attack" ? "攻擊 → " + (r.targetName || "?")
           : r.action === "intercept" ? "攔截 " + (r.targetName || "?") + " 的攻擊（保護 " + (r.protectName || "?") + "）"
+          : r.action === "support" ? "治療 → " + (r.supportName || "?") +
+              (r.targetName ? "（若被攻擊則跟 " + r.targetName + " 拚點）" : "")
           : r.action === "defend" ? "防禦／應對 " + (r.targetName || "?")
           : "（尚未宣告）";
         what.appendChild(el("span", { cls: "br-action", text: actionText }));
