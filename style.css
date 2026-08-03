@@ -526,6 +526,76 @@ body.modal-open { overflow: hidden; }
 }
 .roster-line { font-size: var(--text-sm); padding: 2px 0; font-family: var(--font-mono); }
 
+/* ============ NPC 倉庫與本場編成 ============ */
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-2) 0 var(--space-4);
+}
+.lib-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-warning);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  display: flex; flex-direction: column; gap: var(--space-2);
+}
+.lc-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.lc-head .name { font-weight: 600; font-size: var(--text-md); color: var(--color-foreground-strong); }
+.lc-stats { font-size: var(--text-sm); font-family: var(--font-mono); color: var(--color-muted-fg); }
+.lc-blurb { font-size: var(--text-sm); color: var(--color-muted-fg); margin: 0; line-height: 1.5; }
+.lc-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: wrap; margin-top: auto; }
+
+.link-btn {
+  background: none; border: none; padding: 0; min-height: 0;
+  color: var(--color-accent-fg); font-size: var(--text-sm); text-decoration: underline;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--color-foreground-strong); }
+
+.qty { display: flex; align-items: center; gap: 4px; }
+.qty input { width: 58px; text-align: center; font-family: var(--font-mono); }
+.qty button { min-width: 36px; padding: 6px 8px; }
+
+.lineup-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  flex-wrap: wrap;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.lr-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lr-info .name { font-weight: 600; color: var(--color-foreground-strong); }
+.lr-info .hint { font-family: var(--font-mono); font-size: var(--text-xs); }
+.lr-ops { display: flex; gap: 4px; }
+.lr-ops button { min-width: 36px; padding: 6px 10px; }
+
+/* ============ KP 自由選 / 一鍵指定 ============ */
+.free-pick {
+  margin-top: var(--space-3);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+.free-pick > summary {
+  cursor: pointer; font-size: var(--text-sm); font-weight: 500;
+  color: var(--color-warning); min-height: 28px; display: flex; align-items: center;
+}
+.free-pick > summary:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+button.warn-btn { border-color: rgba(245,158,11,.55); color: var(--color-warning); }
+button.warn-btn:hover { background: rgba(245,158,11,.12); }
+
+.batch-list {
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+  max-height: 180px; overflow-y: auto;
+}
+
 /* 結算順序列 */
 .turn-order {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
@@ -605,6 +675,7 @@ body.modal-open { overflow: hidden; }
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: var(--space-3);
   margin: var(--space-4) 0;
+  align-items: start;   /* 倒下者收合後要真的變矮，不要被同列拉高 */
 }
 
 .entity-card {
@@ -617,7 +688,15 @@ body.modal-open { overflow: hidden; }
 }
 .entity-card.pc { border-left: 3px solid var(--color-primary); }
 .entity-card.npc { border-left: 3px solid var(--color-warning); }
-.entity-card.dead { opacity: 0.45; }
+/* 倒下者收合成一行 —— 一場放 3~6 隻小怪時，面板才不會被屍體佔滿 */
+.entity-card.dead { opacity: 0.5; padding: var(--space-2) var(--space-3); }
+.entity-card.dead > *:not(.ec-head) { display: none; }
+
+/* 實體多的時候自動縮排（觸控目標仍由行動裝置區塊守住 44px） */
+.entity-panels.compact { grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: var(--space-2); }
+.entity-panels.compact .entity-card { padding: var(--space-2) var(--space-3); }
+.entity-panels.compact .entity-card .name { font-size: var(--text-base); }
+.entity-panels.compact .bar-wrap { height: 13px; }
 .entity-card.cant-act { outline: 2px dashed rgba(239,68,68,.6); outline-offset: 2px; }
 .entity-card .name { font-weight: 600; font-size: var(--text-md); color: var(--color-foreground-strong); }
 .entity-card .tag { font-size: 11px; color: var(--color-muted-fg); margin-left: var(--space-2); }
@@ -702,4 +781,9 @@ body.modal-open { overflow: hidden; }
   .state-editor .kp-row { flex-direction: column; align-items: stretch; }
   .state-editor .kp-row select, .state-editor .kp-row input, .state-editor .kp-row button { width: 100%; }
   .modal-close { min-height: 44px; }
+  /* 文字型按鈕的觸控熱區也要 44px（視覺仍是一行連結） */
+  .link-btn { min-height: 44px; display: inline-flex; align-items: center; padding: 0 4px; }
+  .free-pick > summary { min-height: 44px; }
+  .lib-grid { grid-template-columns: 1fr; }
+  .lineup-row { align-items: flex-start; }
 }

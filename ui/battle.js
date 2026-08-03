@@ -23,6 +23,7 @@
     npcSlots: "階段一・回合開始 — NPC 槽位（KP 手填，不做上限檢查）",
     skillDraw1d6: "階段一・回合開始 — 技能抽選（手動輸入 1d6 兩次）",
     chooseSkill: "階段一・回合開始 — 從菜單選一個技能",
+    batchTarget: "階段二・一鍵指定敵方目標（之後仍可逐一訂正）",
     declare: "階段二・宣告與配對",
     confirmPairing: "階段二・KP 確認本回合行動（可改宣告／改技能／新增／刪除）",
     damageMultiplier: "階段四・傷害乘數骰（整把技能共用）",
@@ -129,7 +130,7 @@
   Battle.ownerOf = ownerOf;
   Battle.isPlayerFillable = function (req) {
     if (!req) return false;
-    if (req.type === "npcSlots" || req.type === "confirmPairing") return false;
+    if (req.type === "npcSlots" || req.type === "confirmPairing" || req.type === "batchTarget") return false;
     const id = ownerOf(req);
     if (!id) return false;
     const e = battle && battle.entities.find(function (x) { return x.id === id; });
@@ -144,8 +145,13 @@
     const ent = req.entityId ? battle.entities.find(function (e) { return e.id === req.entityId; }) : null;
 
     if (req.type === "npcSlots") {
-      box.appendChild(el("h4", { text: req.name + " 本回合槽位數" }));
-      box.appendChild(el("p", { cls: "hint", text: "由 KP 手動填入；工具不做上限檢查（8 的約束只適用於 PC）。" }));
+      const many = (req.count || 1) > 1;
+      box.appendChild(el("h4", { text: req.name + (many ? " ×" + req.count : "") + " 本回合槽位數" }));
+      box.appendChild(el("p", {
+        cls: "hint",
+        text: "由 KP 手動填入；工具不做上限檢查（8 的約束只適用於 PC）。" +
+          (many ? "　此值會套用到 " + (req.names || []).join("／") + "。" : "")
+      }));
       const i = el("input"); i.type = "number"; i.min = 0; i.value = req.current;
       i.setAttribute("aria-label", "槽位數");
       const b = el("button", { cls: "primary", text: "送出" });
@@ -211,6 +217,53 @@
         box.appendChild(optionRow(def, ""));
         box.appendChild(el("p", { cls: "hint", text: "【防守】臨時生命值 = 最終威力 × 5　│　【閃躲】躲掉攻擊，但拚輸後本回合再也擋不住" }));
       }
+      // KP 自由選（只有 NPC 有）：摺疊起來，展開才列 —— 預設仍走抽選，這只是逃生門
+      const free = (req.freePickOptions || []).concat(
+        req.options.filter(function (o) { return o.free; }));
+      if (req.canFreePick && free.length) {
+        const det = el("details", { cls: "free-pick" });
+        const sum = el("summary", { text: "KP 自由選（無視抽選限制）" });
+        det.appendChild(sum);
+        det.appendChild(el("p", {
+          cls: "hint",
+          text: "抽選的機率結構（A 75%／B 55.6%／C 30.6%）是設計的一部分 —— 用了會在事件紀錄留下 ⚠ 標記。" +
+            "隱藏技（只能被喚出的）不在此列。"
+        }));
+        det.appendChild(optionRow(free, "warn-btn"));
+        box.appendChild(det);
+      }
+      return;
+    }
+
+    if (req.type === "batchTarget") {
+      box.appendChild(el("h4", { text: "一鍵指定敵方目標" }));
+      box.appendChild(el("p", {
+        cls: "hint",
+        text: "把下列 " + req.candidates.length + " 個敵方攻擊行動全部指向同一個人。" +
+          "攔截與防禦技不在此列（一定要逐一裁定）。指定完之後，仍可在確認板上逐一改目標。"
+      }));
+      const list = el("div", { cls: "batch-list" });
+      req.candidates.forEach(function (c) {
+        list.appendChild(el("div", {
+          cls: "hint",
+          text: "・" + c.name + "　第 " + (c.slotIndex + 1) + " 槽《" + c.skillName + "》"
+        }));
+      });
+      box.appendChild(list);
+
+      box.appendChild(el("div", { cls: "sub-label", text: "全部攻擊誰" }));
+      const r = el("div", { cls: "row" });
+      req.targets.forEach(function (t) {
+        const b = el("button", { cls: "primary", text: t.name + "（HP " + t.hp + "/" + t.maxHp + "）" });
+        b.type = "button";
+        b.onclick = function () { submit({ targetId: t.id }); };
+        r.appendChild(b);
+      });
+      box.appendChild(r);
+      const skip = el("button", { text: "略過，我要逐一宣告" });
+      skip.type = "button";
+      skip.onclick = function () { submit(null); };
+      box.appendChild(row([skip]));
       return;
     }
 
@@ -328,7 +381,17 @@
         what.appendChild(skTag);
         if (r.isGuard) what.appendChild(el("span", { cls: "tag order", text: "防守" }));
         if (r.isDodge) what.appendChild(el("span", { cls: "tag order", text: "閃躲" }));
-        if (r.dice && r.dice.length) what.appendChild(el("span", { cls: "hint", text: "1d6=" + r.dice.join("／") }));
+        if (r.dice && r.dice.length) {
+          what.appendChild(el("span", {
+            cls: "hint",
+            text: "1d6=" + r.dice.join("／") + (r.autoRolled ? "（代骰）" : "")
+          }));
+        }
+        if (r.batched) {
+          const bt = el("span", { cls: "tag warn", text: "批次指定" });
+          bt.title = "由「一鍵指定敵方目標」填入 —— 按［改宣告］即可單獨訂正這一隻";
+          what.appendChild(bt);
+        }
         const actionText = r.action === "attack" ? "攻擊 → " + (r.targetName || "?")
           : r.action === "intercept" ? "攔截 " + (r.targetName || "?") + " 的攻擊（保護 " + (r.protectName || "?") + "）"
           : r.action === "defend" ? "防禦／應對 " + (r.targetName || "?")

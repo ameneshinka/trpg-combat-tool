@@ -155,6 +155,8 @@
   function renderPanels(container, battle, opts) {
     opts = opts || {};
     container.innerHTML = "";
+    // 一場放 3~6 隻小怪時自動縮排，避免面板把整個畫面吃光
+    container.classList.toggle("compact", battle.entities.length > 6);
     const order = battle.turnOrder || [];
     battle.entities.forEach(function (e) {
       const idx = order.indexOf(e);

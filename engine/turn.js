@@ -153,6 +153,31 @@
   }
   Turn.buildDrawMenu = buildDrawMenu;
 
+  // 1d6（NPC 的抽選骰由工具代擲；rng 可注入以利測試）
+  function rollD6(rng) { return 1 + Math.floor((rng || Math.random)() * 6); }
+  Turn.rollD6 = rollD6;
+
+  /**
+   * 「KP 自由選」的候選清單 —— 無視抽選限制，直接從技能表挑。
+   *
+   * 為什麼是逃生門而不是預設：規則 skill 的 KP 權限表把「NPC 技能選擇」列為
+   * KP 每回合的臨場權限（authoring.md），但抽選的機率結構（A 75%／B 55.6%／C 30.6%）
+   * 本身是設計的一部分 ——「這回合抽不到大招」是敵人也要承受的代價。
+   * 所以預設仍照抽，用了自由選會在事件紀錄留下 ⚠ 標記。
+   *
+   * ⚠ 隱藏技（drawable === false，只能被「喚出」打出）不列入，
+   *   否則「喚出」的設計會被自由選整個繞過。
+   */
+  function freePickOptions(entity, exclude) {
+    const skip = (exclude || []).map(function (o) { return o.id; });
+    return (entity.skillLibrary || [])
+      .filter(function (s) { return s.drawable !== false && skip.indexOf(s.id) === -1; })
+      .map(function (s) {
+        return { id: s.id, name: s.name, kind: s.type === "defense" ? "defense" : "attack", free: true };
+      });
+  }
+  Turn.freePickOptions = freePickOptions;
+
   // ---------------- 硬幣執行期狀態的作用域 ----------------
   /**
    * 取得某技能本次使用的 coinRuntime。
@@ -243,8 +268,9 @@
   Turn.runTurnEndPhase = runTurnEndPhase;
 
   // ---------------- 階段一：回合開始 ----------------
-  function* runTurnStartPhase(battle, events) {
+  function* runTurnStartPhase(battle, events, opts) {
     const entities = battle.entities;
+    const rng = (opts || {}).rng;
 
     // 0. 恐慌恢復（先於一切）
     entities.forEach(function (e) {
@@ -261,11 +287,32 @@
 
     // 1. 更新槽位：PC 自動、NPC 讀 KP 填入值
     updatePcSlots(battle, events);
+    // 同一款 NPC 的所有實例共用一次提問（放 5 隻哥布林時不用被問 5 遍）
     const npcs = entities.filter(function (e) { return !e.isPC && e.hp > 0; });
-    for (const npc of npcs) {
-      const n = yield { type: "npcSlots", entityId: npc.id, name: npc.name, current: npc.slots || 1 };
-      npc.slots = Math.max(0, Number(n) || 0);
-      events.push(npc.name + " 槽位（KP 手填）= " + npc.slots);
+    const npcGroups = [];
+    npcs.forEach(function (e) {
+      const key = e.blueprintId || e.id;
+      let g = npcGroups.find(function (x) { return x.key === key; });
+      if (!g) { g = { key: key, members: [] }; npcGroups.push(g); }
+      g.members.push(e);
+    });
+    for (const g of npcGroups) {
+      const first = g.members[0];
+      const n = yield {
+        type: "npcSlots",
+        entityId: first.id,                 // 沿用 ownerOf（玩家端據此判斷可否填 → NPC 一律不可）
+        blueprintId: g.key,
+        name: first.baseName || first.name,
+        names: g.members.map(function (m) { return m.name; }),
+        count: g.members.length,
+        current: first.slots || 1
+      };
+      const slots = Math.max(0, Number(n) || 0);
+      g.members.forEach(function (m) { m.slots = slots; });
+      events.push((first.baseName || first.name) +
+        (g.members.length > 1 ? " ×" + g.members.length : "") +
+        " 槽位（KP 手填）= " + slots +
+        (g.members.length > 1 ? "（套用到 " + g.members.map(function (m) { return m.name; }).join("／") + "）" : ""));
     }
 
     // 2. 判定無法行動者
@@ -295,17 +342,22 @@
     for (const e of entities) {
       if (!e.canAct || !e.slots) continue;
       for (let i = 0; i < e.slots; i++) {
-        const dice = yield { type: "skillDraw1d6", entityId: e.id, name: e.name, slotIndex: i };
+        // PC 的 1d6 由玩家手擲（Discord 骰子機器人）；NPC 由工具代骰，骰值照樣寫進事件紀錄
+        const dice = e.isPC
+          ? yield { type: "skillDraw1d6", entityId: e.id, name: e.name, slotIndex: i }
+          : { die1: rollD6(rng), die2: rollD6(rng), auto: true };
         // 菜單＝骰出的攻擊技 ＋ 防禦技（防守／閃躲不受抽選限制，抽選當下就能選）
         const menu = buildDrawMenu(e, dice.die1, dice.die2);
-        const diceText = "1d6 = " + dice.die1 + "／" + dice.die2;
+        // KP 自由選：只給 NPC，且只列出菜單以外的技能（否則是空區塊）
+        const freeOpts = e.isPC ? [] : freePickOptions(e, menu.options);
+        const diceText = "1d6 = " + dice.die1 + "／" + dice.die2 + (dice.auto ? "（工具代骰）" : "");
         let chosen;
-        if (!menu.options.length) {
+        if (!menu.options.length && !freeOpts.length) {
           events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
             " 骰到的槽位無技能指向，且無防禦技可用 → 視為空槽");
           continue;
         }
-        if (menu.options.length === 1) {
+        if (menu.options.length === 1 && !freeOpts.length) {
           chosen = menu.options[0].id;
           events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
             "（唯一選項）→ " + menu.options[0].name);
@@ -313,18 +365,23 @@
           chosen = yield {
             type: "chooseSkill", entityId: e.id, name: e.name, slotIndex: i,
             options: menu.options, dice: [dice.die1, dice.die2],
-            attackCount: menu.attackCount, forcedSingleAttack: menu.forcedSingleAttack
+            attackCount: menu.attackCount, forcedSingleAttack: menu.forcedSingleAttack,
+            canFreePick: freeOpts.length > 0, freePickOptions: freeOpts
           };
-          const pick = menu.options.find(function (x) { return x.id === chosen; });
+          let pick = menu.options.find(function (x) { return x.id === chosen; });
+          const isFree = !pick;
+          if (!pick) pick = freeOpts.find(function (x) { return x.id === chosen; });
           events.push(e.name + " 第 " + (i + 1) + " 槽：" + diceText +
             (menu.forcedSingleAttack ? "（攻擊選項只有一個，但可改用防禦技）" : "") +
             " → 選擇 " + (pick ? pick.name : chosen) +
-            (pick && pick.kind === "defense" ? "（防禦技）" : ""));
+            (pick && pick.kind === "defense" ? "（防禦技）" : "") +
+            (isFree ? "　⚠ KP 自由選，無視抽選限制" : ""));
         }
         // 存下菜單與骰值 → 階段二若要「改技能」可用同一份菜單重選
         e.drawnSkills.push({
           slotIndex: i, skillId: chosen,
-          menuOptions: menu.options, dice: [dice.die1, dice.die2]
+          menuOptions: menu.options, freePickOptions: freeOpts,
+          dice: [dice.die1, dice.die2], autoRolled: !!dice.auto
         });
       }
     }
@@ -599,6 +656,54 @@
   }
 
   /**
+   * 一鍵指定敵方的初始目標（規則 skill 的 KP 權限表：「NPC 初始目標（可覆寫）」）。
+   *
+   * 只作用在 skill.type === "attack" 的槽位 —— 攔截與防禦一定要逐一裁定，不能批次。
+   * 填好的宣告標上 batched，之後在確認板上按［改宣告］就能逐一訂正
+   * （玩家宣告攔截時必改，所以這條路徑一定要留著）。
+   */
+  function* askBatchTarget(battle, events) {
+    const candidates = [];
+    (battle.turnOrder || battle.entities).forEach(function (e) {
+      if (e.isPC || !e.canAct) return;
+      (e.drawnSkills || []).forEach(function (d) {
+        const sk = findSkill(e, d.skillId);
+        if (!sk || sk.type !== "attack") return;
+        candidates.push({
+          entityId: e.id, name: e.name,
+          slotIndex: d.slotIndex, skillId: d.skillId, skillName: sk.name
+        });
+      });
+    });
+    if (candidates.length < 2) return false;   // 只有一個攻擊行動 → 批次沒有意義
+
+    const targets = battle.entities
+      .filter(function (x) { return x.isPC && x.hp > 0; })
+      .map(function (x) { return { id: x.id, name: x.name, hp: x.hp, maxHp: x.maxHp }; });
+    if (!targets.length) return false;
+
+    const ans = yield { type: "batchTarget", candidates: candidates, targets: targets };
+    if (!ans || !ans.targetId) {
+      events.push("（未使用一鍵指定 → 敵方目標逐一宣告）");
+      return false;
+    }
+    const t = battle.entities.find(function (x) { return x.id === ans.targetId; });
+    candidates.forEach(function (c) {
+      const e = battle.entities.find(function (x) { return x.id === c.entityId; });
+      if (!e) return;
+      e.declarations = (e.declarations || []).filter(function (d) { return d.slotIndex !== c.slotIndex; });
+      e.declarations.push({
+        slotIndex: c.slotIndex, skillId: c.skillId,
+        action: "attack", targetId: ans.targetId, batched: true
+      });
+    });
+    events.push("⇉ 一鍵指定：敵方 " + candidates.length + " 個攻擊行動全部指向 " +
+      (t ? t.name : ans.targetId) + "（可在確認板上逐一訂正）");
+    return true;
+  }
+  Turn.askBatchTarget = askBatchTarget;
+
+  /**
    * 「改技能」可選的清單。
    * ＝ 當初骰出的菜單 ＋ 所有防禦型技能。
    * 依規則（lifecycle.md / authoring.md）：【防守】【閃躲】不受抽選限制、想用就能用，
@@ -613,6 +718,10 @@
         opts.push({ id: sk.id, name: sk.name, kind: "defense" });
       }
     });
+    // NPC：確認板上也保留「KP 自由選」這條逃生門（與抽選當下同一份清單）
+    if (!entity.isPC) {
+      freePickOptions(entity, opts).forEach(function (o) { opts.push(o); });
+    }
     return opts;
   }
   Turn.rechooseOptions = rechooseOptions;
@@ -673,6 +782,8 @@
           protectId: d ? d.protectId : null,
           protectName: pro ? pro.name : null,
           canRechoose: rechooseOptions(e, drawn).length > 1,
+          batched: !!(d && d.batched),
+          autoRolled: !!drawn.autoRolled,
           dice: drawn.dice || []
         });
       });
@@ -682,7 +793,7 @@
   Turn.buildDeclarationBoard = buildDeclarationBoard;
 
   // ---------------- 完整一回合（六階段） ----------------
-  function* runTurn(battle, events) {
+  function* runTurn(battle, events, opts) {
     events.push("═══ 回合 " + battle.turnNumber + " ═══");
 
     // 階段一
@@ -690,13 +801,16 @@
     if (global.Passives && global.Passives.resetPerTurnCounters) {
       global.Passives.resetPerTurnCounters(battle.entities);
     }
-    yield* runTurnStartPhase(battle, events);
+    yield* runTurnStartPhase(battle, events, opts);
 
     // 階段二：宣告 → 確認（可回頭改）
     events.push("【階段二】宣告與配對");
+    yield* askBatchTarget(battle, events);   // 先給一鍵指定，已填的槽位下面就跳過
     for (const e of battle.turnOrder) {
       if (!e.canAct || !e.drawnSkills.length) continue;
       for (const drawn of e.drawnSkills) {
+        const already = (e.declarations || []).some(function (d) { return d.slotIndex === drawn.slotIndex; });
+        if (already) continue;   // 一鍵指定已經填好
         yield* askDeclare(battle, e, drawn, false, events);
       }
       // 防禦技不受抽選限制：KP／玩家可額外宣告（各佔一槽，同回合可多次）

@@ -60,6 +60,23 @@
     }
   };
 
+  // ---------------- 深拷貝 ----------------
+  /**
+   * 遞迴深拷貝設定物件，但「函式原樣帶過」。
+   * ⚠ 不可以用 JSON.parse(JSON.stringify(...))：那會把技能的 onUse / onHit
+   *   與被動的函式整個吃掉。小怪技能十之八九要寫「命中時上震顫」，一定會踩到。
+   *   技能 hook 與被動都是無狀態函式，多個實例共用同一份參照是安全的。
+   */
+  function cloneSpec(v) {
+    if (Array.isArray(v)) return v.map(cloneSpec);
+    if (v && typeof v === "object") {
+      const o = {};
+      Object.keys(v).forEach(function (k) { o[k] = cloneSpec(v[k]); });
+      return o;
+    }
+    return v;   // 純值與 function 都走這裡
+  }
+
   // ---------------- 建構工廠 ----------------
   function skill(o) {
     return {
@@ -84,7 +101,9 @@
     const lib = (o.skillLibrary || []).map(skill);
     return {
       id: o.id,
+      blueprintId: o.blueprintId || o.id,   // 同款小怪的所有實例共用同一個藍圖 id（批次操作靠它分組）
       name: o.name,
+      baseName: o.baseName || o.name,       // 不含 A/B/C 後綴的本體名（批次提問時顯示用）
       isPC: !!o.isPC,
       hp: o.hp, maxHp: o.maxHp !== undefined ? o.maxHp : o.hp,
       dex: o.dex,
@@ -142,35 +161,87 @@
   }
 
   // ============================================================
-  // 回歸測試／示範用角色
-  // 數值刻意對齊 trpg-clash-rules 的兩個驗算範例，方便桌邊快速驗證引擎沒壞。
+  // NPC 倉庫（藍圖）
+  // ------------------------------------------------------------
+  // 一款 NPC 一筆 = 「本體」。戰場上要放幾隻，由編成畫面決定（Characters.spawn）。
+  // 每個實例的 HP／臨時HP／專注力／槽位／狀態／印記／資源／宣告 全部各算各的，
+  // 共用的只有這裡的定義 —— 所以調平衡只要改這一筆，同款全部同步。
+  //
+  // 藍圖 = entity() 吃的所有設定欄位，外加三個倉庫展示用欄位：
+  //   category    倉庫分組
+  //   blurb       卡片上的一句話定位
+  //   defaultCount 投放數量預設值
   // ============================================================
-  const TEST_DUMMY = entity({
-    id: "test_red", name: "測試假人（紅幣）", isPC: false,
-    hp: 200, dex: 10,
-    attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
-    skillLibrary: [
-      { id: "t_red", name: "四紅幣測試", basePower: 7, coinPower: 3,
-        coins: ["red", "red", "red", "red"],
-        text: "全紅幣技能。紅幣拚輸時不會消失，只會「碎幣」（本次使用期間硬幣威力視為 +1），" +
-          "因此可擲數恆為 4，攻擊次數也恆為 4 下。判輸時機＝所有紅幣皆已碎幣。",
-        notes: "clash.md 驗算：拚點威力 19 → 17 → 15；傷害打 4 下 8/9/12/15" },
-      { id: "t_normal", name: "四普通幣測試", basePower: 7, coinPower: 9,
-        coins: ["normal", "normal", "normal", "normal"],
-        text: "全普通幣技能。普通幣拚輸即「損失」（暫時退出序列），可擲數與攻擊次數隨之下降 —— " +
-          "普通幣像盾，連敗會雪崩。",
-        notes: "damage.md 驗算：損失 1 枚、乘數 4、正反正 → 83/83/128 合計 294" },
-      { id: "t_mixed", name: "混搭測試", basePower: 5, coinPower: 4,
-        coins: ["normal", "normal", "red", "red"],
-        text: "混搭型別：前段兩枚普通幣當緩衝（輸掉即損失），撐過前幾次交換後進入後段紅幣的持久戰。",
-        notes: "設計慣例：普通幣連續置於前段、紅幣連續置於後段，不交叉排列" },
-      makeGuard(50, 50), makeDodge(50, 50)
-    ],
-    slotMap: { A: "t_red", B: "t_normal", C: "t_mixed" },
-    notes: "引擎驗證用；正式帶團請換成真實敵人"
-  });
+  const NPC_LIBRARY = [
+    // --------------------------------------------------------
+    // 填表範本：哥布林兵
+    // 角卡 → 數值的換算過程全部寫在註解裡，照抄就能建下一款小怪。
+    // --------------------------------------------------------
+    {
+      id: "goblin_grunt", name: "哥布林兵",
+      category: "小怪",
+      blurb: "最基本的雜兵。兩枚硬幣，輸兩次就沒得拚 —— 靠數量壓人，不靠單體。",
+      defaultCount: 3,
+      hp: 30, dex: 9,
+      attributes: { STR: 40, INT: 25, CON: 45, SIZ: 35, LUK: 30 },
+      skillLibrary: [
+        // 【格鬥：棍棒】熟練度 45 → 基威 2；硬幣 1D2(+1)，設計時取 2 枚；STR 40 → 幣威 +3
+        { id: "gg_swing", name: "亂棍", basePower: 2, coinPower: 3,
+          coins: ["normal", "normal"],
+          text: "兩枚普通幣的基本攻擊。輸一次掉一枚，輸兩次就沒有完好硬幣可拚。",
+          notes: "熟練度45→基威2　│　1D2(+1) 取 2 枚　│　STR40→幣威+3" },
+        // 紅幣版：輸掉只會碎幣（有效幣威視為 +1），可擲數不變 → 適合纏鬥
+        { id: "gg_cling", name: "死纏爛打", basePower: 2, coinPower: 3,
+          coins: ["normal", "red"],
+          text: "前段普通幣當緩衝，後段紅幣輸了也不會消失（碎幣），能一直拚下去。",
+          notes: "設計慣例：普通幣在前段、紅幣在後段，不交叉排列" },
+        // 綠幣版：專門對付紅幣對手
+        { id: "gg_pierce", name: "破盾突刺", basePower: 2, coinPower: 3,
+          coins: ["green", "normal"],
+          text: "拚點開始前，綠幣與對方的紅幣互相抵銷（雙方都算損失，對方的紅幣不算碎幣）。",
+          notes: "綠幣放前段：沒有紅幣可消時，它就退化成一枚普通的緩衝幣" },
+        makeGuard(35, 45),    // 防守：基威←SIZ 35、幣威←CON 45
+        makeDodge(25, 30)     // 閃躲：基威←閃避技能 25、幣威←LUK 30
+      ],
+      slotMap: { A: "gg_swing", B: "gg_cling", C: "gg_pierce" },
+      notes: "抽選機率 A 75%／B 55.6%／C 30.6% → 主力是《亂棍》，《破盾突刺》是驚喜。"
+    },
 
-  const TEST_TARGET = entity({
+    // --------------------------------------------------------
+    // 回歸測試用假人
+    // 數值刻意對齊 trpg-clash-rules 的兩個驗算範例，方便桌邊快速驗證引擎沒壞。
+    // --------------------------------------------------------
+    {
+      id: "test_red", name: "測試假人（紅幣）",
+      category: "測試", blurb: "引擎驗算用：碎幣 19/17/15、傷害 294 兩個範例的對照組。", defaultCount: 1,
+      hp: 200, dex: 10,
+      attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
+      skillLibrary: [
+        { id: "t_red", name: "四紅幣測試", basePower: 7, coinPower: 3,
+          coins: ["red", "red", "red", "red"],
+          text: "全紅幣技能。紅幣拚輸時不會消失，只會「碎幣」（本次使用期間硬幣威力視為 +1），" +
+            "因此可擲數恆為 4，攻擊次數也恆為 4 下。判輸時機＝所有紅幣皆已碎幣。",
+          notes: "clash.md 驗算：拚點威力 19 → 17 → 15；傷害打 4 下 8/9/12/15" },
+        { id: "t_normal", name: "四普通幣測試", basePower: 7, coinPower: 9,
+          coins: ["normal", "normal", "normal", "normal"],
+          text: "全普通幣技能。普通幣拚輸即「損失」（暫時退出序列），可擲數與攻擊次數隨之下降 —— " +
+            "普通幣像盾，連敗會雪崩。",
+          notes: "damage.md 驗算：損失 1 枚、乘數 4、正反正 → 83/83/128 合計 294" },
+        { id: "t_mixed", name: "混搭測試", basePower: 5, coinPower: 4,
+          coins: ["normal", "normal", "red", "red"],
+          text: "混搭型別：前段兩枚普通幣當緩衝（輸掉即損失），撐過前幾次交換後進入後段紅幣的持久戰。",
+          notes: "設計慣例：普通幣連續置於前段、紅幣連續置於後段，不交叉排列" },
+        makeGuard(50, 50), makeDodge(50, 50)
+      ],
+      slotMap: { A: "t_red", B: "t_normal", C: "t_mixed" },
+      notes: "引擎驗證用；正式帶團請換成真實敵人"
+    }
+  ];
+
+  // ============================================================
+  // PC 名單（維持寫死；編成畫面只管 NPC）
+  // ============================================================
+  const TEST_TARGET_SPEC = {
     id: "test_target", name: "測試標靶", isPC: true,
     hp: 1000, dex: 12,
     attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
@@ -185,7 +256,7 @@
     ],
     slotMap: { A: "tt_poke", B: "tt_poke2", C: "tt_poke3" },
     notes: "高血量標靶，方便觀察傷害與狀態結算"
-  });
+  };
 
   // ============================================================
   // 四名 PC（骨架 —— 技能組待補）
@@ -227,6 +298,52 @@
   ];
 
   // ============================================================
+  // 藍圖 → 戰場實例
+  // ============================================================
+  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  function instanceSuffix(i) { return i < LETTERS.length ? LETTERS[i] : String(i + 1); }
+
+  function findBlueprint(id) {
+    const bp = NPC_LIBRARY.find(function (b) { return b.id === id; });
+    if (!bp) throw new Error("倉庫裡沒有這款 NPC：" + id);
+    return bp;
+  }
+
+  // 藍圖的展示欄位不該進 entity
+  function toEntitySpec(bp) {
+    const spec = cloneSpec(bp);
+    delete spec.category; delete spec.blurb; delete spec.defaultCount;
+    spec.blueprintId = bp.id;
+    spec.isPC = false;
+    return spec;
+  }
+
+  /**
+   * 從藍圖生出 count 個「互不干擾」的實例。
+   * id  永遠帶 #n（goblin_grunt#1…）—— byId 表、宣告 key「id#槽位」、
+   *     Firebase 的 players/pcIds 全靠 id，不能撞。
+   * 名字 只有 count > 1 才加後綴（哥布林兵 A／B／C），單隻時維持原名。
+   */
+  function spawn(blueprintId, count) {
+    const bp = findBlueprint(blueprintId);
+    const n = Math.max(1, Number(count) || 1);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const spec = toEntitySpec(bp);
+      spec.id = bp.id + "#" + (i + 1);
+      spec.name = n > 1 ? bp.name + " " + instanceSuffix(i) : bp.name;
+      spec.baseName = bp.name;
+      out.push(entity(spec));
+    }
+    return out;
+  }
+
+  // 給倉庫的「查看詳情」用：丟棄用實例，不進戰場
+  function preview(blueprintId) {
+    return entity(toEntitySpec(findBlueprint(blueprintId)));
+  }
+
+  // ============================================================
   // 對外 API
   // ============================================================
   global.Characters = {
@@ -235,12 +352,15 @@
     skill: skill,
     makeGuard: makeGuard,
     makeDodge: makeDodge,
+    cloneSpec: cloneSpec,
 
-    // 目前可用的參戰名單（換成真實角色後改這裡）
-    roster: function () {
-      return [entity(JSON.parse(JSON.stringify(stripRuntime(TEST_TARGET)))),
-              entity(JSON.parse(JSON.stringify(stripRuntime(TEST_DUMMY))))];
-    },
+    // --- NPC 倉庫 ---
+    NPC_LIBRARY: NPC_LIBRARY,
+    spawn: spawn,
+    preview: preview,
+
+    // --- PC 名單（寫死）---
+    pcRoster: function () { return [entity(cloneSpec(TEST_TARGET_SPEC))]; },
     // PC 槽位成長順序（戰鬥輪開始前由 KP 指定；預設照名單順序）
     pcGrowthOrder: function () { return ["test_target"]; },
 
@@ -252,18 +372,8 @@
       if (!t.skillLibrary || !t.skillLibrary.length) {
         throw new Error(t.name + " 的技能組尚未填寫（見 data/characters.js 的 PC_TEMPLATES）");
       }
-      return entity(t);
+      return entity(cloneSpec(t));
     }
   };
-
-  // entity() 產出的物件含執行期欄位；重新建構時只留設定欄位
-  function stripRuntime(e) {
-    return {
-      id: e.id, name: e.name, isPC: e.isPC, hp: e.maxHp, maxHp: e.maxHp, dex: e.dex,
-      attributes: e.attributes, skillLibrary: e.skillLibrary, slotMap: e.defaultSlotMap,
-      slotMapRules: e.slotMapRules, passives: e.passives, tuning: e.tuning,
-      states: e.states, resources: e.resources, resourceMax: e.resourceMax, notes: e.notes
-    };
-  }
 
 })(window);

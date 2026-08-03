@@ -17,8 +17,9 @@
   let battle = null;
 
   // ---------------- 名單建構 ----------------
+  // PC 寫死；NPC 由編成畫面從倉庫投放（同款每隻都是獨立實例）
   function buildBattle() {
-    const entities = global.Characters.roster();
+    const entities = global.Characters.pcRoster().concat(global.Library.spawnAll());
     return {
       roundNumber: 0,
       turnNumber: 1,
@@ -199,12 +200,22 @@
   }
 
   // ---------------- 設定畫面 ----------------
+  let currentMode = "solo";
   function applyMode(m) {
+    currentMode = m;
     $("#kpRow").classList.toggle("hidden", m !== "kp");
     $("#joinRow").classList.toggle("hidden", m !== "player");
     $("#soloRow").classList.toggle("hidden", m === "player");
     $("#startBtn").classList.toggle("hidden", m === "player");
-    $("#startBtn").textContent = m === "kp" ? "建立房間並開始戰鬥" : "開始戰鬥（單機）";
+    updateStartLabel();
+  }
+
+  function updateStartLabel() {
+    const btn = $("#startBtn");
+    if (!btn) return;
+    const n = global.Library ? global.Library.totalCount() : 0;
+    const base = currentMode === "kp" ? "建立房間並開始戰鬥" : "開始戰鬥（單機）";
+    btn.textContent = base + (n ? "　—　敵方 " + n + " 隻" : "　—　尚未編成敵人");
   }
 
   function genRoom() {
@@ -215,12 +226,12 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    // 名單摘要（可點擊 → 開戰前就能查角色的技能與被動文本）
+    // PC 名單摘要（可點擊 → 開戰前就能查角色的技能與被動文本）
     const list = $("#rosterPreview");
-    global.Characters.roster().forEach(function (e) {
+    global.Characters.pcRoster().forEach(function (e) {
       const line = el("div", {
         cls: "roster-line",
-        text: (e.isPC ? "【PC】" : "【NPC】") + e.name + "　HP " + e.maxHp + "　DEX " + e.dex +
+        text: "【PC】" + e.name + "　HP " + e.maxHp + "　DEX " + e.dex +
           "　技能 " + e.skillLibrary.length + " 個　▸ 點擊查看文本"
       });
       line.setAttribute("role", "button");
@@ -233,6 +244,13 @@
       });
       list.appendChild(line);
     });
+    // NPC 倉庫與本場編成
+    global.Library.init({
+      shelf: $("#npcLibrary"),
+      lineup: $("#npcLineup"),
+      onChange: updateStartLabel
+    });
+
     const pcs = global.Characters.PC_TEMPLATES.filter(function (t) { return !t.skillLibrary || !t.skillLibrary.length; });
     if (pcs.length) {
       $("#pcPending").textContent = "尚未填寫技能組的 PC：" + pcs.map(function (t) { return t.name; }).join("、") +

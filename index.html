@@ -49,8 +49,21 @@
         角色寫死在 <code>data/characters.js</code>（依 trpg-combat-webapp skill：不做資料輸入介面）。
         調平衡只改該檔的數值與 <code>tuning</code>，被動邏輯在 <code>engine/passives.js</code>。
       </p>
+
+      <h3>PC</h3>
       <div id="rosterPreview" class="roster-preview"></div>
       <p class="hint" id="pcPending" style="color:var(--warn);"></p>
+
+      <h3>NPC 倉庫</h3>
+      <p class="hint">
+        一款 NPC 一筆「本體」，戰場上要放幾隻由你決定。
+        <strong>同款的每一隻，HP／狀態／印記／資源都各算各的</strong>；
+        共用的只有本體定義 —— 所以調平衡改一次，全場同步。
+      </p>
+      <div id="npcLibrary"></div>
+
+      <h3>本場編成</h3>
+      <div id="npcLineup"></div>
       <p class="hint">
         規則以三個 skill 為準：<code>trpg-clash-rules</code>（規則）、
         <code>trpg-combat-webapp</code>（實作）、<code>trpg-character-design</code>（角色設計）。
@@ -97,6 +110,7 @@
 <!-- UI -->
 <script src="ui/panels.js"></script>
 <script src="ui/detail.js"></script>
+<script src="ui/library.js"></script>
 <script src="ui/battle.js"></script>
 <script src="ui/app.js"></script>
 </body>

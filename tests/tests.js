@@ -603,6 +603,138 @@
         "追加攻擊：基威 1，每枚 +1 → 威力 2 / 3");
     }
 
+    // ============================================================
+    // NPC 倉庫：藍圖 → 實例（同款多隻，血量與狀態各算各的）
+    // ============================================================
+    const Ch = global.Characters;
+
+    section("倉庫：spawn 產出互不干擾的實例");
+    {
+      const three = Ch.spawn("goblin_grunt", 3);
+      eq(three.length, 3, "spawn(3) 產出 3 隻");
+      eq(three.map(function (e) { return e.id; }),
+        ["goblin_grunt#1", "goblin_grunt#2", "goblin_grunt#3"], "實例 id 互異且帶 #n");
+      eq(three.map(function (e) { return e.name; }),
+        ["哥布林兵 A", "哥布林兵 B", "哥布林兵 C"], "多隻時顯示名加 A/B/C 後綴");
+      eq(three.every(function (e) { return e.blueprintId === "goblin_grunt"; }), true,
+        "所有實例共用同一個 blueprintId（批次操作靠它分組）");
+      eq(three[0].baseName, "哥布林兵", "baseName 不含後綴（批次提問顯示用）");
+
+      const one = Ch.spawn("goblin_grunt", 1);
+      eq(one[0].name, "哥布林兵", "只有一隻時不加後綴");
+      eq(one[0].id, "goblin_grunt#1", "但 id 仍帶 #1（避免與藍圖 id 撞名）");
+
+      // --- 獨立性：巢狀物件最容易被淺拷貝穿透，逐一驗 ---
+      const a = three[0], b = three[1];
+      a.hp = 5; a.tempHp = 12; a.focus = -20; a.slots = 3;
+      S.apply(a, "失血", { layer: 2, level: 1 }, []);
+      S.apply(a, "自訂印記", { layer: 1, isMark: true }, []);
+      a.resources["蠻力"] = 7;
+      a.skillLibrary[0].basePower = 999;
+      a.slotMap.A = "gg_pierce";
+      a.drawnSkills.push({ slotIndex: 0, skillId: "gg_swing" });
+
+      eq([b.hp, b.tempHp, b.focus, b.slots], [30, 0, 0, 0], "改 A 的 HP／臨時HP／專注力／槽位，B 不受影響");
+      eq(b.states, {}, "改 A 的狀態與印記，B 的 states 仍是空的");
+      eq(b.resources["蠻力"], undefined, "改 A 的自訂資源，B 不受影響");
+      eq(b.skillLibrary[0].basePower, 2, "改 A 的技能數值，B 的技能不受影響");
+      eq(b.slotMap.A, "gg_swing", "改 A 的 slotMap，B 不受影響");
+      eq(b.drawnSkills.length, 0, "A 抽到的技能不會出現在 B 身上");
+
+      // --- 藍圖本身不能被實例污染 ---
+      const fresh = Ch.spawn("goblin_grunt", 1)[0];
+      eq([fresh.hp, fresh.skillLibrary[0].basePower], [30, 2], "改過實例之後，再 spawn 出來的仍是乾淨的藍圖值");
+    }
+
+    section("倉庫：cloneSpec 保住技能的 onUse／onHit 函式");
+    {
+      // ⚠ 這是舊版用 JSON.parse(JSON.stringify()) 深拷貝時會靜默壞掉的地方
+      const hit = function () { return "hit"; };
+      const spec = { id: "fn_test", name: "函式測試", hp: 10, dex: 1,
+        skillLibrary: [{ id: "k", name: "招", coins: ["normal"], onHit: hit }] };
+      const copy = Ch.cloneSpec(spec);
+      eq(typeof copy.skillLibrary[0].onHit, "function", "cloneSpec 之後 onHit 仍是函式");
+      eq(copy.skillLibrary[0].onHit === hit, true, "無狀態函式沿用同一份參照（共用安全）");
+      eq(copy.skillLibrary === spec.skillLibrary, false, "陣列本身仍是全新的（不共用容器）");
+      eq(typeof JSON.parse(JSON.stringify(spec)).skillLibrary[0].onHit, "undefined",
+        "對照組：JSON 深拷貝會把函式吃掉（所以不能用）");
+    }
+
+    section("KP 自由選：排除隱藏技（喚出專用）");
+    {
+      const e = mkEntity({
+        isPC: false,
+        skillLibrary: [
+          mkSkill({ id: "open", name: "普通招" }),
+          mkSkill({ id: "def", name: "防守", type: "defense" }),
+          mkSkill({ id: "hidden", name: "喚出專用招", drawable: false })
+        ]
+      });
+      const all = T.freePickOptions(e);
+      eq(all.map(function (o) { return o.id; }), ["open", "def"], "隱藏技不列入自由選（否則喚出的設計被繞過）");
+      eq(all.map(function (o) { return o.kind; }), ["attack", "defense"], "自由選也標出攻擊／防禦");
+      eq(T.freePickOptions(e, [{ id: "open" }]).map(function (o) { return o.id; }), ["def"],
+        "已在菜單裡的技能不重複列出");
+    }
+
+    section("NPC 的 1d6 由工具代骰（rng 可注入）");
+    {
+      const npc = Ch.spawn("goblin_grunt", 1)[0];
+      const battle = { turnNumber: 1, entities: [npc], pcGrowthOrder: [], turnOrder: [] };
+      // rng 固定 → 骰面固定：0 → 1、0.9 → 6
+      const r = runGen(T.runTurnStartPhase(battle, [], { rng: seqRng([0, 0.9]) }), [1]);
+      const types = r.asked.map(function (q) { return q.type; });
+      eq(types.indexOf("skillDraw1d6"), -1, "NPC 不會被問 1d6（工具代骰）");
+      eq(types[0], "npcSlots", "仍會問 NPC 槽位");
+      eq(npc.drawnSkills[0].dice, [1, 6], "代骰結果照注入的 rng（1 與 6）");
+      eq(npc.drawnSkills[0].autoRolled, true, "標記為代骰，事件紀錄與確認板才看得出來");
+      const chooseReq = r.asked.find(function (q) { return q.type === "chooseSkill"; });
+      eq(!!chooseReq && chooseReq.canFreePick, true, "NPC 的技能菜單附帶 KP 自由選逃生門");
+    }
+
+    section("NPC 槽位：同款實例共用一次提問");
+    {
+      const gob = Ch.spawn("goblin_grunt", 3);
+      const battle = { turnNumber: 1, entities: gob, pcGrowthOrder: [], turnOrder: [] };
+      const r = runGen(T.runTurnStartPhase(battle, [], { rng: seqRng([0]) }), [2]);
+      const slotReqs = r.asked.filter(function (q) { return q.type === "npcSlots"; });
+      eq(slotReqs.length, 1, "三隻同款哥布林只問一次槽位");
+      eq(slotReqs[0].count, 3, "提問帶著這一款有幾隻");
+      eq(slotReqs[0].names, ["哥布林兵 A", "哥布林兵 B", "哥布林兵 C"], "提問列出會被套用的實例");
+      eq(gob.map(function (e) { return e.slots; }), [2, 2, 2], "填一次套用到全部");
+    }
+
+    section("一鍵指定敵方目標（之後仍可逐一訂正）");
+    {
+      const pc = Ch.pcRoster()[0];
+      const gob = Ch.spawn("goblin_grunt", 2);
+      const battle = { turnNumber: 1, entities: [pc].concat(gob), pcGrowthOrder: ["test_target"], turnOrder: [] };
+      battle.entities.forEach(function (e) {
+        e.canAct = true; e.slots = 1; e.declarations = [];
+        e.drawnSkills = [{ slotIndex: 0, skillId: e.isPC ? "tt_poke" : "gg_swing", menuOptions: [], dice: [1, 1] }];
+      });
+      battle.turnOrder = T.computeTurnOrder(battle.entities);
+
+      const r = runGen(T.askBatchTarget(battle, []), [{ targetId: pc.id }]);
+      const req = r.asked[0];
+      eq(req.type, "batchTarget", "兩個以上敵方攻擊行動 → 會問一鍵指定");
+      eq(req.candidates.length, 2, "候選只有敵方 NPC 的攻擊槽位（PC 不在內）");
+      eq(req.targets.map(function (t) { return t.id; }), [pc.id], "可選目標＝存活的 PC");
+      eq(gob.map(function (e) { return e.declarations[0].targetId; }), [pc.id, pc.id], "兩隻都指向同一個目標");
+      eq(gob[0].declarations[0].batched, true, "填入的宣告標記為批次（確認板顯示可訂正）");
+      eq(pc.declarations.length, 0, "PC 的宣告不受一鍵指定影響");
+
+      // 確認板應該看得到批次標記，而［改宣告］會把它換成單獨宣告
+      const board = T.buildDeclarationBoard(battle);
+      eq(board.filter(function (x) { return x.batched; }).length, 2, "確認板上兩列標著批次指定");
+
+      // 防禦技不批次
+      gob[1].drawnSkills = [{ slotIndex: 0, skillId: "guard", menuOptions: [], dice: [] }];
+      gob.forEach(function (e) { e.declarations = []; });
+      const r2 = runGen(T.askBatchTarget(battle, []), [{ targetId: pc.id }]);
+      eq(r2.asked.length, 0, "只剩一個攻擊行動（另一個是防守）→ 不問一鍵指定");
+    }
+
     return { pass: pass, fail: fail, failures: failures, lines: lines };
   };
 })(window);
