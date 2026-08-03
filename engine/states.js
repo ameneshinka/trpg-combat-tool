@@ -50,8 +50,25 @@
   function get(entity, name) {
     return entity.states[name] || { layer: 0, level: 0 };
   }
+  /**
+   * 取得（必要時建立）狀態物件。
+   * 旗標存在狀態物件上（沿用 isBurstTag 的做法），新增印記不必改引擎：
+   *   noDecay   不因回合結束而減少（〈櫻之香〉〈勁足〉〈仁心〉〈茶乃的秘方藥〉）
+   *   maxLayer  自訂層數上限（〈爆裂綻放〉1、〈仁心〉4、〈秘方藥〉5）
+   * 來源有兩個：角色資料的 entity.markMeta（宣告一次、永遠生效），
+   * 或 apply() 的 opts（臨時指定）。
+   */
   function ensure(entity, name) {
-    if (!entity.states[name]) entity.states[name] = { layer: 0, level: 0 };
+    if (!entity.states[name]) {
+      const st = { layer: 0, level: 0 };
+      const meta = (entity.markMeta || {})[name];
+      if (meta) {
+        st.isMark = true;
+        if (meta.noDecay) st.noDecay = true;
+        if (meta.maxLayer !== undefined) st.maxLayer = meta.maxLayer;
+      }
+      entity.states[name] = st;
+    }
     return entity.states[name];
   }
   function layerOf(entity, name) { return get(entity, name).layer || 0; }
@@ -70,7 +87,8 @@
     const st = ensure(entity, name);
     const before = st.layer || 0;
     let next = before + delta;
-    const cap = LAYER_CAPS[name];
+    // 自訂上限（印記）優先於通用上限表
+    const cap = st.maxLayer !== undefined ? st.maxLayer : LAYER_CAPS[name];
     if (cap !== undefined && next > cap) next = cap;
     if (next < 0) next = 0;
     st.layer = next;
@@ -132,7 +150,12 @@
           "（現 " + levelOf(entity, name) + " 級）");
       }
     }
-    if (opts.isMark) ensure(entity, name).isMark = true;
+    if (opts.isMark || opts.noDecay || opts.maxLayer !== undefined) {
+      const st = ensure(entity, name);
+      if (opts.isMark) st.isMark = true;
+      if (opts.noDecay) st.noDecay = true;
+      if (opts.maxLayer !== undefined) st.maxLayer = opts.maxLayer;
+    }
     return events;
   }
 
@@ -144,11 +167,95 @@
     });
   }
 
+  // ---------------- 記帳式臨時增益 ----------------
+  /**
+   * 「給多少就收多少」的臨時增益（裁決 21、28）。
+   *
+   * 為什麼不能整個歸零：結月的爆裂綻放在回合開始給一批凝神／傷害強化／強壯，
+   * 但她回合中用技能還會自己疊 —— 回合結束若整個清掉，會連她自己疊的一起吃掉。
+   * 所以施加時記下「實際給進去多少」（吃過上限之後的真實增量），回合結束只扣這些。
+   *
+   * 帳本存在「施予者」身上：granter._grants[key] = [{ targetId, name, layer, level }]
+   * ⚠ 存 targetId 而不是物件參照 —— 戰鬥狀態會被 JSON 序列化送進 Firebase。
+   */
+  function grant(granter, target, key, name, layerDelta, levelDelta, events) {
+    const beforeL = layerOf(target, name), beforeV = levelOf(target, name);
+    apply(target, name, layerDelta || 0, levelDelta || 0).forEach(function (m) {
+      if (events) events.push(m);
+    });
+    const gotL = layerOf(target, name) - beforeL;
+    const gotV = levelOf(target, name) - beforeV;
+    if (gotL === 0 && gotV === 0) return { layer: 0, level: 0 };
+    granter._grants = granter._grants || {};
+    (granter._grants[key] = granter._grants[key] || []).push({
+      targetId: target.id, name: name, layer: gotL, level: gotV
+    });
+    return { layer: gotL, level: gotV };
+  }
+
+  /** 收回某本帳記過的全部增益，然後清空帳本。 */
+  function revoke(granter, battle, key, events) {
+    const list = (granter._grants || {})[key];
+    if (!list || !list.length) return 0;
+    let n = 0;
+    list.forEach(function (g) {
+      const t = battle.entities.find(function (x) { return x.id === g.targetId; });
+      if (!t) return;
+      // ⚠ 先收級數再收層數 —— 層數掉到 0 會連帶把級數歸零，順序反了會多扣
+      if (g.level) addLevel(t, g.name, -g.level);
+      if (g.layer) addLayer(t, g.name, -g.layer);
+      if (events) {
+        events.push("（臨時增益收回）" + t.name + " 的【" + g.name + "】" +
+          (g.layer ? "層 −" + g.layer : "") + (g.layer && g.level ? "、" : "") +
+          (g.level ? "級 −" + g.level : ""));
+      }
+      n++;
+    });
+    delete granter._grants[key];
+    return n;
+  }
+
+  // ---------------- 延遲債務 ----------------
+  /**
+   * 記在「別人」身上、之後才結算的效果（和真被動4：兩回合後扣 8 層守護）。
+   * 掛在承受者身上，於階段一開頭統一結算。
+   * ⚠ 承受者倒下 → 債務取消（裁決 40）。
+   */
+  function addPendingDebt(entity, debt) {
+    entity.pendingDebts = entity.pendingDebts || [];
+    entity.pendingDebts.push(debt);   // { name, layer, level, label }
+  }
+
+  function runPendingDebts(entity, events) {
+    const list = entity.pendingDebts || [];
+    if (!list.length) return 0;
+    entity.pendingDebts = [];
+    if (entity.hp <= 0) {
+      if (events) events.push(entity.name + " 已倒下，" + list.length + " 筆延遲債務取消");
+      return 0;
+    }
+    list.forEach(function (d) {
+      const beforeL = layerOf(entity, d.name);
+      if (d.level) addLevel(entity, d.name, d.level);
+      if (d.layer) addLayer(entity, d.name, d.layer);
+      if (events) {
+        events.push("〈" + (d.label || "延遲效果") + "〉" + entity.name + " 的【" + d.name + "】" +
+          "層 " + beforeL + " → " + layerOf(entity, d.name) +
+          (d.layer < 0 && beforeL < -d.layer ? "（不足，扣到 0 為止）" : ""));
+      }
+    });
+    return list.length;
+  }
+
   States.ensure = ensure;
   States.addLayer = addLayer;
   States.addLevel = addLevel;
   States.apply = apply;
   States.clearZero = clearZero;
+  States.grant = grant;
+  States.revoke = revoke;
+  States.addPendingDebt = addPendingDebt;
+  States.runPendingDebts = runPendingDebts;
 
   // ---------------- 持續生效狀態的讀值 ----------------
   function effectiveDex(entity) {
@@ -320,13 +427,20 @@
   /**
    * 震顫爆發：最接近血量的混亂值 + 震顫級數 → 然後震顫【級數歸零、層數 −1】。
    */
-  function tremorBurst(target, events) {
+  function tremorBurst(target, events, opts) {
+    opts = opts || {};
     const lv = levelOf(target, "震顫");
     if (lv <= 0) { if (events) events.push("【震顫爆發】：" + target.name + " 無累積的震顫級數，無效果"); return 0; }
     if (events) events.push("【震顫爆發】：" + target.name + " 引爆 " + lv + " 級震顫");
     raiseNearestThreshold(target, lv, events);
     const st = ensure(target, "震顫");
-    st.level = 0;
+    // opts.keepLevel：旭技能D 前三枚「此次爆發不會導致級數歸零」（裁決 29）
+    // ⚠ 層數照減 −1；層數若因此掉到 0，級數仍會依「級數依附層數」同步歸零
+    if (opts.keepLevel) {
+      if (events) events.push("（此次爆發不歸零【震顫】級數，保留 " + lv + " 級）");
+    } else {
+      st.level = 0;
+    }
     addLayer(target, "震顫", -1);
     return lv;
   }

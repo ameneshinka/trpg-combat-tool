@@ -233,6 +233,7 @@
       Object.keys(e.states).forEach(function (name) {
         const st = e.states[name];
         if (st.isBurstTag) return;                      // 瀑標記持續存在
+        if (st.noDecay) return;                         // 〈櫻之香〉〈勁足〉〈仁心〉〈秘方藥〉
         if (st.addedThisTurn) { st.addedThisTurn = false; return; } // 步驟1 新增 → 豁免
         if ((st.layer || 0) > 0) S.addLayer(e, name, -1);
       });
@@ -283,6 +284,8 @@
       e.cantActRestOfTurn = false;
       e.drawnSkills = [];
       e.declarations = [];
+      // 別人記在我身上、之後才結算的效果（和真被動4 的守護債務）
+      S.runPendingDebts(e, events);
     });
 
     // 1. 更新槽位：PC 自動、NPC 讀 KP 填入值

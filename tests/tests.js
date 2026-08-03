@@ -920,6 +920,129 @@
       eq(E.heal(dead, 50, "", ev), 0, "倒下者不能被治療");
     }
 
+    // ============================================================
+    // 狀態管線擴充（印記旗標、記帳式增益、keepLevel、延遲債務）
+    // ============================================================
+    section("印記：noDecay 不因回合結束減少、maxLayer 自訂上限");
+    {
+      const e = mkEntity({
+        name: "囤貨者",
+        markMeta: { "仁心": { noDecay: true, maxLayer: 4 }, "爆裂綻放": { noDecay: true, maxLayer: 1 } }
+      });
+      S.apply(e, "仁心", 3, 0);
+      eq(S.layerOf(e, "仁心"), 3, "先囤 3 層");
+      S.apply(e, "仁心", 5, 0);
+      eq(S.layerOf(e, "仁心"), 4, "maxLayer 4 封頂（不是通用上限表的值）");
+      S.apply(e, "爆裂綻放", 3, 0);
+      eq(S.layerOf(e, "爆裂綻放"), 1, "爆裂綻放上限 1 層");
+
+      S.apply(e, "守護", 3, 0);   // 對照組：一般狀態照減
+      T.runTurnEndPhase([e], []);
+      eq(S.layerOf(e, "仁心"), 4, "noDecay：回合結束不減");
+      eq(S.layerOf(e, "守護"), 2, "對照組：一般狀態照通則 −1");
+    }
+
+    section("記帳式臨時增益：給多少收多少，自己疊的完整保留");
+    {
+      const y = mkEntity({ id: "y", name: "結月" });
+      const battle = { entities: [y] };
+      // 爆發回合：綻放給 6 層傷害強化
+      S.grant(y, y, "bloom", "傷害強化", 6, 0, []);
+      eq(S.layerOf(y, "傷害強化"), 6, "綻放給了 6 層");
+      // 她回合中自己又疊了 3 層
+      S.apply(y, "傷害強化", 3, 0);
+      eq(S.layerOf(y, "傷害強化"), 9, "自己再疊 3 層 → 9");
+      // 回合結束收帳
+      S.revoke(y, battle, "bloom", []);
+      eq(S.layerOf(y, "傷害強化"), 3, "只收回綻放給的 6 層，自己疊的 3 層完整保留");
+    }
+
+    section("記帳式增益：吃過上限之後，只收回「實際給進去的量」");
+    {
+      const y = mkEntity({ id: "y", name: "結月" });
+      const battle = { entities: [y] };
+      S.apply(y, "傷害強化", 14, 0);              // 先有 14 層
+      const got = S.grant(y, y, "bloom", "傷害強化", 6, 0, []);
+      eq(S.layerOf(y, "傷害強化"), 16, "撞到 16 層上限");
+      eq(got.layer, 2, "實際只給進去 2 層");
+      S.revoke(y, battle, "bloom", []);
+      eq(S.layerOf(y, "傷害強化"), 14, "只收回 2 層，不會多扣");
+    }
+
+    section("記帳式增益：可以記在別人身上（旭給敵人的傷害弱化）");
+    {
+      const a = mkEntity({ id: "a", name: "旭" });
+      const g1 = mkEntity({ id: "g1", name: "哥布林A" });
+      const g2 = mkEntity({ id: "g2", name: "哥布林B" });
+      const battle = { entities: [a, g1, g2] };
+      S.grant(a, g1, "killer", "傷害弱化", 3, 0, []);
+      S.grant(a, g2, "killer", "傷害弱化", 3, 0, []);
+      eq([S.layerOf(g1, "傷害弱化"), S.layerOf(g2, "傷害弱化")], [3, 3], "兩隻敵人各拿 3 層");
+      S.revoke(a, battle, "killer", []);
+      eq([S.layerOf(g1, "傷害弱化"), S.layerOf(g2, "傷害弱化")], [0, 0], "回合結束一次收乾淨");
+    }
+
+    section("震顫爆發：keepLevel 保留級數，但層數照減");
+    {
+      const t = mkEntity({ name: "目標", hp: 500, maxHp: 500 });
+      S.apply(t, "震顫", 4, 30);
+      const ev = [];
+      const lv = S.tremorBurst(t, ev, { keepLevel: true });
+      eq(lv, 30, "引爆 30 級");
+      eq(S.levelOf(t, "震顫"), 30, "keepLevel → 級數保留（旭技能D 前三枚）");
+      eq(S.layerOf(t, "震顫"), 3, "層數照減 −1");
+
+      S.tremorBurst(t, ev);   // 第四枚：正常爆發
+      eq(S.levelOf(t, "震顫"), 0, "不帶 keepLevel → 級數歸零");
+      eq(S.layerOf(t, "震顫"), 2, "層數同樣 −1");
+    }
+
+    section("震顫爆發：keepLevel 但層數掉到 0 時，級數仍依附層數歸零");
+    {
+      const t = mkEntity({ name: "目標", hp: 500, maxHp: 500 });
+      S.apply(t, "震顫", 1, 20);
+      S.tremorBurst(t, [], { keepLevel: true });
+      eq(S.layerOf(t, "震顫"), 0, "最後一層被扣掉");
+      eq(S.levelOf(t, "震顫"), 0, "級數依附層數 → 仍然歸零（keepLevel 擋不住這條）");
+    }
+
+    section("延遲債務：記在別人身上、下個回合開始才結算");
+    {
+      const ally = mkEntity({ name: "隊友" });
+      S.apply(ally, "守護", 10, 0);
+      S.addPendingDebt(ally, { name: "守護", layer: -8, label: "緊急腎上腺素退場" });
+      eq(S.layerOf(ally, "守護"), 10, "掛上債務的當下不扣");
+      const ev = [];
+      S.runPendingDebts(ally, ev);
+      eq(S.layerOf(ally, "守護"), 2, "下回合開始才扣 8 層");
+      eq(ally.pendingDebts.length, 0, "結算後清空");
+    }
+
+    section("延遲債務：不足扣到 0；倒下則取消（裁決 40）");
+    {
+      const a = mkEntity({ name: "薄盾者" });
+      S.apply(a, "守護", 3, 0);
+      S.addPendingDebt(a, { name: "守護", layer: -8, label: "退場" });
+      S.runPendingDebts(a, []);
+      eq(S.layerOf(a, "守護"), 0, "只有 3 層 → 扣到 0 為止，不倒欠");
+
+      const dead = mkEntity({ name: "倒下者", hp: 0 });
+      S.apply(dead, "守護", 10, 0);
+      S.addPendingDebt(dead, { name: "守護", layer: -8, label: "退場" });
+      const ev = [];
+      eq(S.runPendingDebts(dead, ev), 0, "倒下 → 債務取消");
+      eq(S.layerOf(dead, "守護"), 10, "守護不動");
+    }
+
+    section("DEX 換算到角卡尺度（1–99）");
+    {
+      const target = Ch.pcRoster()[0];
+      const gob = Ch.spawn("goblin_grunt", 1)[0];
+      eq([target.dex, gob.dex], [60, 40], "測試標靶 60、哥布林兵 40（與 PC 的 50–90 同一把尺）");
+      S.apply(gob, "迅捷", 5, 0);
+      eq(S.effectiveDex(gob), 40 * 1.25, "迅捷是百分比，換尺度後照常運作");
+    }
+
     return { pass: pass, fail: fail, failures: failures, lines: lines };
   };
 })(window);

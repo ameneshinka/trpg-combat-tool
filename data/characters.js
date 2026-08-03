@@ -187,7 +187,7 @@
       category: "小怪",
       blurb: "最基本的雜兵。兩枚硬幣，輸兩次就沒得拚 —— 靠數量壓人，不靠單體。",
       defaultCount: 3,
-      hp: 30, dex: 9,
+      hp: 30, dex: 40,   // ⚠ dex = 角卡敏捷值（1–99 尺度），與 PC 同一把尺
       attributes: { STR: 40, INT: 25, CON: 45, SIZ: 35, LUK: 30 },
       skillLibrary: [
         // 【格鬥：棍棒】熟練度 45 → 基威 2；硬幣 1D2(+1)，設計時取 2 枚；STR 40 → 幣威 +3
@@ -219,7 +219,7 @@
     {
       id: "test_red", name: "測試假人（紅幣）",
       category: "測試", blurb: "引擎驗算用：碎幣 19/17/15、傷害 294 兩個範例的對照組。", defaultCount: 1,
-      hp: 200, dex: 10,
+      hp: 200, dex: 45,
       attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
       skillLibrary: [
         { id: "t_red", name: "四紅幣測試", basePower: 7, coinPower: 3,
@@ -248,7 +248,7 @@
   // ============================================================
   const TEST_TARGET_SPEC = {
     id: "test_target", name: "測試標靶", isPC: true,
-    hp: 1000, dex: 12,
+    hp: 1000, dex: 60,
     attributes: { STR: 50, INT: 50, CON: 50, SIZ: 50, LUK: 50 },
     skillLibrary: [
       { id: "tt_poke", name: "戳", basePower: 1, coinPower: 1, coins: ["normal"],
