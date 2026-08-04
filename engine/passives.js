@@ -668,6 +668,49 @@
     }
   }
 
+  // ---------------- 敵方 NPC：熟練工作的女僕 ----------------
+  // ⚠ 敵方 NPC 的數值由 KP 自訂，不套角卡換算表。
+
+  Passives.register({
+    id: "maid_order",
+    name: "整頓混亂",
+    text: "使用技能時，如果目標對象的生命值小於生命值上限的 50%，則使技能的基礎威力 +1。",
+    kind: "buff",
+    // ⚠ 被動一律用「累加」而不是「指派」—— 技能自己的 onUse 是指派（威爾技能C、結月防守），
+    //   而 beginSkillUse 把被動排在技能之後，用指派會把技能的加成整個蓋掉。
+    // ⚠ 裁決 43：防禦型技能也算 —— 拚點時防禦方拿到的 target 就是攻擊者；
+    //   只有「無人攻擊的防守」沒有目標，條件自然不成立。
+    onSkillUse: function (ctx) {
+      const t = ctx.payload.targetId && ctx.battle
+        ? ctx.battle.entities.find(function (x) { return x.id === ctx.payload.targetId; })
+        : null;
+      if (!t) return;
+      const pct = ctx.tuning.orderHpThreshold !== undefined ? ctx.tuning.orderHpThreshold : 0.5;
+      if (t.hp >= t.maxHp * pct) return;
+      const bonus = ctx.tuning.orderBasePower || 1;
+      ctx.payload.runtime.basePowerBonus += bonus;
+      ctx.log("〈" + this.name + "〉" + t.name + " 已低於 " + Math.round(pct * 100) +
+        "%（" + t.hp + "／" + t.maxHp + "）→ 基礎威力 +" + bonus);
+    }
+  });
+
+  Passives.register({
+    id: "maid_tidy",
+    name: "整潔強迫症",
+    text: "進入恐慌狀態的回合結束後，下回合開始時，獲得一層【迅捷】。",
+    kind: "buff",
+    // ⚠ 時機能成立是因為階段六「步驟1 跑被動、步驟4 才清恐慌旗標」→ 這裡看得到 isPanicking。
+    //   用延遲債務掛到下回合開始（由階段一開頭的 runPendingDebts 結算），
+    //   剛好落在「恢復行動的那一回合」（裁決 42）。
+    onTurnEnd: function (ctx) {
+      if (!ctx.self.isPanicking) return;
+      ctx.S.addPendingDebt(ctx.self, {
+        name: "迅捷", layer: ctx.tuning.tidySwift || 1, label: this.name
+      });
+      ctx.log("〈" + this.name + "〉" + ctx.self.name + " 恐慌回合結束 → 下回合開始獲得【迅捷】");
+    }
+  });
+
   Passives.resetPerTurnCounters = function (entities) {
     entities.forEach(function (e) {
       e._supportShots = 0;

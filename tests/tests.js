@@ -1259,6 +1259,26 @@
       eq(ev.some(function (m) { return m.indexOf("援護射擊") !== -1; }), true, "事件紀錄有標註");
     }
 
+    section("跨角色：敵方 NPC 引爆震顫，不會觸發威爾的援護射擊");
+    {
+      // 「其他友方單位」＝同陣營。敵人自己引爆（例如敵方也有帶爆發的技能）不該讓威爾開槍。
+      const will = pc("pc_will");
+      const foe = Ch.spawn("maid_veteran", 1)[0];
+      const victim = pc("pc_kazuma");
+      S.apply(victim, "震顫", 3, 12);
+      const battle = mkBattle([will, foe, victim]);
+      const ev = [];
+      E.makeCtx({ self: foe, target: victim, battle: battle, events: ev }).tremorBurst(victim);
+      eq((will.pendingInvocations || []).length, 0, "敵方引爆 → 威爾不追擊");
+
+      // 對照組：友方 PC 引爆就會觸發
+      S.apply(victim, "震顫", 3, 12);
+      const akira = pc("pc_akira");
+      battle.entities.push(akira); akira.canAct = true;
+      E.makeCtx({ self: akira, target: victim, battle: battle, events: ev }).tremorBurst(victim);
+      eq((will.pendingInvocations || []).length, 1, "友方引爆 → 威爾追擊");
+    }
+
     section("跨角色：威爾混亂時，援護射擊不觸發（裁決 16）");
     {
       const a = pc("pc_akira"), will = pc("pc_will");
@@ -1332,6 +1352,149 @@
       const menu = T.buildDrawMenu(k, 6, 6);   // 骰面 6/6 → 都指向 C 槽位
       eq(menu.options.map(function (o) { return o.id; }), ["k_c", "guard", "dodge"],
         "骰到 C 槽位時菜單裡沒有技能A");
+    }
+
+    // ============================================================
+    // 敵方 NPC：熟練工作的女僕
+    // ============================================================
+    function maid() { return Ch.spawn("maid_veteran", 1)[0]; }
+
+    section("女僕：藍圖數值與混亂值");
+    {
+      const m = maid();
+      eq([m.hp, m.maxHp, m.dex], [1322, 1322, 65], "HP 1322、DEX 65（與威爾並列）");
+      eq(S.thresholds(m), [793, 0], "混亂值 = ⌊1322×60%⌋ = 793 與 0");
+      eq(m.skillLibrary.map(function (s) { return s.id; }),
+        ["maid_a", "maid_b", "maid_c", "guard", "dodge"], "五把技能");
+      eq(T.freeUseSkills(m).map(function (s) { return s.id; }), ["guard", "dodge"],
+        "只有防守／閃躲不受抽選限制");
+    }
+
+    section("女僕被動1：目標半血以下 → 基威 +1");
+    {
+      const m = maid();
+      const foe = mkEntity({ id: "v", name: "受害者", isPC: true, hp: 700, maxHp: 1000 });
+      const battle = mkBattle([m, foe]);
+      const skA = m.skillLibrary[0];
+
+      let use = runGen(T.beginSkillUse(m, skA, foe, battle, [])).value;
+      eq(use.basePower, 4, "70% 血 → 不加");
+
+      foe.hp = 500;
+      use = runGen(T.beginSkillUse(m, skA, foe, battle, [])).value;
+      eq(use.basePower, 4, "剛好 50% → 「小於」不成立，仍不加");
+
+      foe.hp = 499;
+      use = runGen(T.beginSkillUse(m, skA, foe, battle, [])).value;
+      eq(use.basePower, 5, "低於 50% → 基威 4 → 5");
+    }
+
+    section("女僕被動1：防禦型技能也吃得到，但無目標時不成立（裁決 43）");
+    {
+      const m = maid();
+      const foe = mkEntity({ id: "v", name: "攻擊者", isPC: true, hp: 100, maxHp: 1000 });
+      const battle = mkBattle([m, foe]);
+      const guard = m.skillLibrary.find(function (s) { return s.id === "guard"; });
+
+      // 拚點中的防禦技：target 就是攻擊者
+      let use = runGen(T.beginSkillUse(m, guard, foe, battle, [])).value;
+      eq(use.basePower, 5, "防守基威 4 → 5（對手已殘血）");
+
+      // 無人攻擊的防守：target 為 null → 條件不成立
+      use = runGen(T.beginSkillUse(m, guard, null, battle, [])).value;
+      eq(use.basePower, 4, "沒有目標 → 不加");
+    }
+
+    section("女僕被動1：用累加，不會被技能自己的 onUse 指派蓋掉");
+    {
+      // 對照組：威爾技能C 的 onUse 是「指派」runtime.basePowerBonus
+      const m = maid();
+      const foe = mkEntity({ id: "v", name: "殘血目標", isPC: true, hp: 10, maxHp: 1000 });
+      S.apply(foe, "易損", 3, 0);
+      const battle = mkBattle([m, foe]);
+      // 借威爾的技能C 掛到女僕身上，驗證兩者相加
+      const willC = pc("pc_will").skillLibrary.find(function (s) { return s.id === "w_c"; });
+      m.tuning.cFragileBonusPerLayer = 1; m.tuning.cFragileBonusCap = 5;
+      m.tuning.cTremorPerStep = 4; m.tuning.cTremorBonusPerStep = 2; m.tuning.cTremorBonusCap = 5;
+      const use = runGen(T.beginSkillUse(m, willC, foe, battle, [])).value;
+      eq(use.basePower, 5 + 3 + 1, "技能指派 +3（易損）＋ 被動累加 +1 = 基威 9");
+    }
+
+    section("女僕被動2：恐慌回合結束 → 下回合開始才拿到【迅捷】（裁決 42）");
+    {
+      const m = maid();
+      const battle = mkBattle([m]);
+      m.isPanicking = true;
+      const ev = [];
+      runGen(P.runTurnEnd([m], battle, ev));
+      eq(S.layerOf(m, "迅捷"), 0, "回合結束當下不加");
+      eq((m.pendingDebts || []).length, 1, "掛上延遲效果");
+      S.runPendingDebts(m, ev);
+      eq(S.layerOf(m, "迅捷"), 1, "下回合開始才拿到 1 層【迅捷】");
+
+      // 不在恐慌中 → 不掛
+      const m2 = maid();
+      runGen(P.runTurnEnd([m2], mkBattle([m2]), []));
+      eq((m2.pendingDebts || []).length, 0, "沒恐慌就不掛");
+    }
+
+    section("女僕技能B／C：條件讀「有效 DEX」（裁決 41）");
+    {
+      const m = maid();
+      const will = pc("pc_will");   // DEX 65，與她並列
+      const battle = mkBattle([m, will]);
+      const skB = m.skillLibrary.find(function (s) { return s.id === "maid_b"; });
+
+      runGen(T.beginSkillUse(m, skB, will, battle, []));
+      eq(m.focus, 0, "65 vs 65「不大於」→ 條件不成立，不加專注力");
+
+      // 對方吃 2 層綁縛 → 有效 DEX 65 × 0.9 = 58.5 → 成立
+      S.apply(will, "綁縛", 2, 0);
+      runGen(T.beginSkillUse(m, skB, will, battle, []));
+      eq(m.focus, 5, "壓了綁縛之後成立 → 專注力 +5");
+
+      // 她自己吃 1 層迅捷也一樣能拉開
+      const m2 = maid(), will2 = pc("pc_will");
+      const b2 = mkBattle([m2, will2]);
+      S.apply(m2, "迅捷", 1, 0);
+      runGen(T.beginSkillUse(m2, skB, will2, b2, []));
+      eq(m2.focus, 5, "自己疊迅捷（65×1.05）也能讓條件成立");
+
+      // 技能C 的版本：成立時給對方 1 層傷害弱化
+      const m3 = maid(), kaz = pc("pc_kazuma");   // DEX 50，穩定成立
+      const b3 = mkBattle([m3, kaz]);
+      const skC = m3.skillLibrary.find(function (s) { return s.id === "maid_c"; });
+      runGen(T.beginSkillUse(m3, skC, kaz, b3, []));
+      eq(S.layerOf(kaz, "傷害弱化"), 1, "技能C 的 [使用時] 給對方【傷害弱化】");
+    }
+
+    section("女僕技能：逐枚的綁縛／易損／傷害弱化");
+    {
+      const m = maid();
+      const foe = mkEntity({ id: "v", name: "目標", isPC: true, hp: 9999, maxHp: 9999 });
+      const battle = mkBattle([m, foe]);
+      useSkill(m, foe, m.skillLibrary.find(function (s) { return s.id === "maid_c"; }), battle, []);
+      eq([S.layerOf(foe, "易損"), S.layerOf(foe, "傷害弱化"), S.layerOf(foe, "綁縛")],
+        [1, 2, 2], "易損 1（幣1）、傷害弱化 2（使用時 + 幣2）、綁縛 2（幣3）");
+    }
+
+    section("女僕：閃躲拚贏才回專注力");
+    {
+      const m = maid();
+      const atk = mkEntity({ id: "a", name: "弱攻擊", isPC: true, hp: 500, maxHp: 500,
+        skillLibrary: [mkSkill({ id: "weak", basePower: 0, coinPower: 0, coins: ["normal"] })] });
+      const battle = mkBattle([m, atk]);
+      m.declarations = [{ slotIndex: 0, skillId: "dodge", action: "defend" }];
+      atk.declarations = [{ slotIndex: 0, skillId: "weak", action: "attack", targetId: m.id }];
+      const ev = [];
+      withRandom(0, function () {
+        runGen(T.resolveEntry(battle, {
+          kind: "clash", aEntityId: "a", aSkillId: "weak", aSlot: 0,
+          bEntityId: m.id, bSkillId: "dodge", bSlot: 0, targetId: m.id
+        }, ev), new Array(20).fill(1));
+      });
+      eq(ev.some(function (x) { return x.indexOf("成功閃躲") !== -1; }), true, "閃躲拚贏");
+      eq(m.focus > 0, true, "拚贏 → 專注力 +5（含拚點本身的專注力結算）");
     }
 
     return { pass: pass, fail: fail, failures: failures, lines: lines };

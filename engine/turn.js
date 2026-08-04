@@ -567,11 +567,20 @@
     const E = global.Effects;
     // reuseRuntime：技能C 遞迴重用時沿用同一份（裁決 12：條件式加成只算一次）
     const runtime = reuseRuntime || E.makeRuntime();
-    if (!reuseRuntime && skill.onUse) {
-      yield* E.call(skill.onUse, E.makeCtx({
-        self: entity, target: target, skill: skill,
-        battle: battle, events: events, runtime: runtime
-      }));
+    if (!reuseRuntime) {
+      if (skill.onUse) {
+        yield* E.call(skill.onUse, E.makeCtx({
+          self: entity, target: target, skill: skill,
+          battle: battle, events: events, runtime: runtime
+        }));
+      }
+      // 被動層級的 [使用技能時]（女僕的整頓混亂：目標半血以下 → 基威 +1）
+      // ⚠ 排在 skill.onUse 之後 —— 技能的 onUse 是「指派」威力加成（威爾技能C、結月防守），
+      //   被動則一律用「累加」，順序反了會被技能整個蓋掉。
+      if (global.Passives && global.Passives.fire) {
+        yield* global.Passives.fire(entity, "onSkillUse", battle, events,
+          { targetId: target && target.id, skillId: skill.id, runtime: runtime, skill: skill });
+      }
     }
     return {
       runtime: runtime,

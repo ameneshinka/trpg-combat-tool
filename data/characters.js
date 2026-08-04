@@ -215,6 +215,106 @@
     },
 
     // --------------------------------------------------------
+    // 熟練工作的女僕 —— 減益／控場型精英
+    // ⚠ 敵方 NPC 的數值由 KP 自訂，不套角卡換算表（基威／幣威直接照抄，不做推導）。
+    // --------------------------------------------------------
+    {
+      id: "maid_veteran", name: "熟練工作的女僕",
+      category: "精英",
+      blurb: "壓有效 DEX 的滾雪球型敵人：對玩家上【綁縛】、自己疊【迅捷】，" +
+        "而她技能B／C 的觸發條件正好就是比有效 DEX —— 越打越容易成立。",
+      defaultCount: 1,
+      hp: 1322, dex: 65,
+      attributes: { STR: 55, INT: 70, CON: 65, SIZ: 60, LUK: 35 },
+      sheet: { 力量: 55, 體質: 65, 敏捷: 65, 意志: 25, 外貌: 60, 體型: 60, 智力: 70, 教育: 50, 幸運: 35 },
+      passives: ["maid_order", "maid_tidy"],
+      tuning: {
+        orderHpThreshold: 0.5, orderBasePower: 1,
+        tidySwift: 1, skillBFocusGain: 5, dodgeFocusGain: 5
+      },
+      slotMap: { A: "maid_a", B: "maid_b", C: "maid_c" },
+      skillLibrary: [
+        { id: "maid_a", name: "打掃...打掃...", basePower: 4, coinPower: 6, coins: ["normal"],
+          coinEffects: [{
+            onHit: function (ctx) { ctx.apply(ctx.target, "傷害弱化", 1, 0); }
+          }],
+          text: "1 枚硬幣｜基礎威力 4｜硬幣威力 +6\n" +
+            "硬幣1 [命中時] 對目標對象施加 1 層【傷害弱化】",
+          notes: "抽選機率最高（骰面 1–3，75%）的那一把 —— 她最常打出來的招。" },
+
+        { id: "maid_b", name: "聽話...聽話...", basePower: 4, coinPower: 4,
+          coins: ["normal", "normal"],
+          // [使用時] 比的是「有效 DEX」（裁決 41）：她疊迅捷、對方吃綁縛都會影響結果
+          onUse: function (ctx) {
+            if (!ctx.target) return;
+            const mine = ctx.S.effectiveDex(ctx.self), theirs = ctx.S.effectiveDex(ctx.target);
+            if (mine <= theirs) {
+              ctx.log("《" + ctx.skill.name + "》有效 DEX " + mine.toFixed(1) + " ≤ " +
+                ctx.target.name + " 的 " + theirs.toFixed(1) + " → 條件不成立");
+              return;
+            }
+            ctx.addFocus(ctx.self, ctx.tuning.skillBFocusGain || 5, "《" + ctx.skill.name + "》壓制");
+          },
+          coinEffects: [
+            { onHit: function (ctx) { ctx.apply(ctx.target, "綁縛", 1, 0); } },
+            { onHit: function (ctx) {
+                ctx.apply(ctx.target, "綁縛", 1, 0);
+                ctx.apply(ctx.target, "易損", 1, 0);
+              } }
+          ],
+          text: "2 枚硬幣｜基礎威力 4｜硬幣威力 +4\n" +
+            "[使用時] 如果自己的 DEX 大於目標對象的 DEX，則立刻增加 5 點專注力\n" +
+            "硬幣1 [命中時] 對目標對象施加 1 層【綁縛】\n" +
+            "硬幣2 [命中時] 對目標對象施加 1 層【綁縛】與 1 層【易損】",
+          notes: "自我加速的核心：專注力越高正面率越高，而【綁縛】又讓下次的 DEX 條件更容易成立。" },
+
+        { id: "maid_c", name: "維持宅邸的一切規矩...", basePower: 5, coinPower: 4,
+          coins: ["normal", "normal", "normal"],
+          onUse: function (ctx) {
+            if (!ctx.target) return;
+            const mine = ctx.S.effectiveDex(ctx.self), theirs = ctx.S.effectiveDex(ctx.target);
+            if (mine <= theirs) {
+              ctx.log("《" + ctx.skill.name + "》有效 DEX " + mine.toFixed(1) + " ≤ " +
+                ctx.target.name + " 的 " + theirs.toFixed(1) + " → 條件不成立");
+              return;
+            }
+            ctx.apply(ctx.target, "傷害弱化", 1, 0);
+          },
+          coinEffects: [
+            { onHit: function (ctx) { ctx.apply(ctx.target, "易損", 1, 0); } },
+            { onHit: function (ctx) { ctx.apply(ctx.target, "傷害弱化", 1, 0); } },
+            { onHit: function (ctx) { ctx.apply(ctx.target, "綁縛", 2, 0); } }
+          ],
+          text: "3 枚硬幣｜基礎威力 5｜硬幣威力 +4\n" +
+            "[使用時] 如果自己的 DEX 大於目標對象的 DEX，對目標對象施加 1 層【傷害弱化】\n" +
+            "硬幣1 [命中時] 對目標對象施加 1 層【易損】\n" +
+            "硬幣2 [命中時] 對目標對象施加 1 層【傷害弱化】\n" +
+            "硬幣3 [命中時] 對目標對象施加 2 層【綁縛】",
+          notes: "一次上 2 層【綁縛】—— 打完之後她對那個人的 DEX 條件通常就穩定成立了。" },
+
+        { id: "guard", name: "防守", type: "defense", isGuard: true,
+          basePower: 4, coinPower: 9, coins: ["normal"],
+          text: "1 枚硬幣｜基礎威力 4｜硬幣威力 +9\n" +
+            "[使用時] 增加臨時生命值，增加量為 最終威力 ×5" },
+
+        { id: "dodge", name: "閃躲", type: "defense", isDodge: true,
+          basePower: 5, coinPower: 6, coins: ["normal"],
+          // ⚠ 防禦技的 onHit 只在「拚贏」時觸發 → 正好就是「閃避成功時」
+          onHit: function (ctx) {
+            ctx.addFocus(ctx.self, ctx.tuning.dodgeFocusGain || 5, "《閃躲》成功");
+          },
+          text: "1 枚硬幣｜基礎威力 5｜硬幣威力 +6\n" +
+            "躲過敵方單位的攻擊，使其無法命中。\n" +
+            "[閃避成功時] 恢復 5 點專注力",
+          notes: "角卡寫「閃避」，工具沿用規則書的名稱【閃躲】（同一個機制）。" +
+            "⚠ 閃躲拚輸的硬幣損失持續到回合結束 —— 她被突破一次，該回合就再也擋不住。" }
+      ],
+      notes: "HP 1322、混亂值 793／0。DEX 65 與威爾並列（原始值），但她會靠被動2 與綁縛把差距拉開。\n" +
+        "⚠ 她完全不碰【震顫】→ 不會觸發威爾的援護射擊，打她時威爾的子彈完全由玩家自己控制。\n" +
+        "⚠ 被動1 讓她在把人打到半血之後基威 +1（防禦型也吃），所以殘局階段她會變硬也變痛。"
+    },
+
+    // --------------------------------------------------------
     // 回歸測試用假人
     // 數值刻意對齊 trpg-clash-rules 的兩個驗算範例，方便桌邊快速驗證引擎沒壞。
     // --------------------------------------------------------
