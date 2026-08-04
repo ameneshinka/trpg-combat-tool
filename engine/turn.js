@@ -51,6 +51,30 @@
   }
   Turn.mayInterceptPlayerSide = mayInterceptPlayerSide;
 
+  /**
+   * 這個角色「真的攔得到」的攻擊者清單。
+   *
+   * 用途：宣告表單只列出這些人 —— 不讓 KP／玩家選到必定會被 buildPairing 打回票的
+   * 對象（選了會白白浪費一個槽位，而且要等到確認板才看得到「攔截被拒」）。
+   *
+   * ⚠ 判斷條件必須與 buildPairing 的攔截判定「完全一致」，否則 UI 與引擎會漂移。
+   *   所以放在引擎、由測試釘住，UI 只負責渲染。
+   *   ① 方向限制 mayInterceptPlayerSide（不成立 → 直接沒得攔）
+   *   ② 有效 DEX 嚴格大於攻擊者（裁決 44）
+   *   ③ 只列敵對陣營 —— lifecycle.md：「攔截的本質是把**敵方技能**的目標
+   *      轉移到攔截者身上」，所以自己與隊友不該出現在這個清單裡。
+   */
+  function interceptableAttackers(self, entities) {
+    if (!self || !mayInterceptPlayerSide(self)) return [];
+    return (entities || []).filter(function (x) {
+      if (!x || x.hp <= 0) return false;
+      if (x.id === self.id) return false;
+      if (x.isPC === self.isPC) return false;
+      return canIntercept(self, x);
+    });
+  }
+  Turn.interceptableAttackers = interceptableAttackers;
+
   // ---------------- PC 槽位成長 ----------------
   /**
    * 只有 PC 共用總和上限 8；友方 NPC 不計入（其槽位由 KP 手填）。

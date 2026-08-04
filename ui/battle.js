@@ -277,19 +277,24 @@
           (req.isGuard ? "防守" : req.isDodge ? "閃躲" : req.skillType === "defense" ? "防禦型" : "攻擊型") + "）"
       }));
       const isSupport = req.targetSide === "ally";
-      const actionSel = el("select");
-      actionSel.setAttribute("aria-label", "動作");
-      const acts = isSupport
-        ? [["support", "治療／支援友方"]]
-        : req.skillType === "defense"
-          ? [["defend", "用來防禦／閃躲"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]]
-          : [["attack", "攻擊"], ["intercept", "攔截（把隊友被打的攻擊搶過來）"]];
-      acts.forEach(function (a) { const o = el("option", { text: a[1] }); o.value = a[0]; actionSel.appendChild(o); });
-
       const self = battle.entities.find(function (x) { return x.id === req.entityId; });
       const alive = battle.entities.filter(function (x) { return x.hp > 0; });
       const enemies = alive.filter(function (x) { return self && x.isPC !== self.isPC; });
       const allies = alive.filter(function (x) { return self && x.isPC === self.isPC && x.id !== self.id; });
+
+      // 只列「真的攔得到」的攻擊者 —— 條件與 buildPairing 同源（Turn.interceptableAttackers）
+      const interceptable = T.interceptableAttackers(self, alive);
+      const canDoIntercept = interceptable.length > 0;
+
+      const actionSel = el("select");
+      actionSel.setAttribute("aria-label", "動作");
+      const ICEPT = ["intercept", "攔截（把隊友被打的攻擊搶過來）"];
+      const acts = isSupport
+        ? [["support", "治療／支援友方"]]
+        : req.skillType === "defense"
+          ? [["defend", "用來防禦／閃躲"]].concat(canDoIntercept ? [ICEPT] : [])
+          : [["attack", "攻擊"]].concat(canDoIntercept ? [ICEPT] : []);
+      acts.forEach(function (a) { const o = el("option", { text: a[1] }); o.value = a[0]; actionSel.appendChild(o); });
 
       const targetSel = el("select"); targetSel.setAttribute("aria-label", "目標");
       const protectSel = el("select"); protectSel.setAttribute("aria-label", "保護對象");
@@ -335,9 +340,10 @@
           const anyOpt = el("option", { text: "（任何攻擊他的人）" });
           anyOpt.value = ""; targetSel.appendChild(anyOpt);
         }
-        const list = (act === "attack" || act === "intercept")
-          ? enemies.concat(alive.filter(function (x) { return enemies.indexOf(x) === -1; }))
-          : alive;
+        const list = act === "intercept" ? interceptable
+          : act === "attack"
+            ? enemies.concat(alive.filter(function (x) { return enemies.indexOf(x) === -1; }))
+            : alive;
         list.forEach(function (x) {
           const o = el("option", {
             text: x.name + (x.isPC ? "（PC）" : "（NPC）") + " DEX " + S.effectiveDex(x).toFixed(1)
@@ -366,6 +372,12 @@
           if (req.previous.protectId) protectSel.value = req.previous.protectId;
           restoreTarget = req.previous.targetId;
         }
+        // ⚠ 上次選的是攔截、但這回合已經沒有攔得到的人 → 該選項不存在，
+        //   指派會靜默失敗（value 變成空字串）→ 退回第一個選項，避免送出空動作
+        if (!actionSel.value) {
+          actionSel.value = acts[0][0];
+          restoreTarget = undefined;
+        }
       }
       syncTargetOptions(restoreTarget);
 
@@ -385,6 +397,16 @@
       }
 
       box.appendChild(row([el("span", { text: "動作：" }), actionSel]));
+      // 攔不到任何人時，說明為什麼沒有「攔截」這個選項（不然會以為是 bug）
+      if (!isSupport && !canDoIntercept && self) {
+        box.appendChild(el("p", {
+          cls: "hint",
+          text: T.mayInterceptPlayerSide(self)
+            ? "（沒有「攔截」選項：" + self.name + " 的有效 DEX " + S.effectiveDex(self).toFixed(1) +
+              " 未嚴格大於場上任何一名敵人，攔不到任何攻擊）"
+            : "（沒有「攔截」選項：非玩家方依規則不能攔截打向玩家的攻擊，且此角色無「攔截例外」被動）"
+        }));
+      }
       if (isSupport) box.appendChild(rSupport);
       box.appendChild(rTarget);
       box.appendChild(rProtect);

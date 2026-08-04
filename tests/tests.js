@@ -1599,6 +1599,81 @@
         "兩個敵人都變成單方面攻擊");
     }
 
+    section("interceptableAttackers：只列攔得到的敵方攻擊者");
+    {
+      const hero = mkEntity({ id: "hero", name: "攔截者", isPC: true, dex: 65 });
+      const slowFoe = mkEntity({ id: "slow", name: "慢敵", isPC: false, dex: 50 });
+      const tieFoe = mkEntity({ id: "tie", name: "同速敵", isPC: false, dex: 65 });
+      const fastFoe = mkEntity({ id: "fast", name: "快敵", isPC: false, dex: 90 });
+      const deadFoe = mkEntity({ id: "dead", name: "倒下的敵人", isPC: false, dex: 10, hp: 0 });
+      const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, dex: 10 });
+      const all = [hero, slowFoe, tieFoe, fastFoe, deadFoe, ally];
+
+      eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow"],
+        "只有比自己慢的敵人：同速（嚴格大於）、更快、倒下、隊友、自己 全部排除");
+
+      S.apply(hero, "迅捷", 2, 0);   // 65 × 1.10 = 71.5
+      eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow", "tie"],
+        "自己吃 2 層迅捷 → 同速敵也攔得到（讀的是有效 DEX）");
+
+      S.apply(fastFoe, "綁縛", 6, 0); // 90 × 0.70 = 63
+      eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow", "tie", "fast"],
+        "快敵被壓 6 層綁縛 → 也攔得到");
+    }
+
+    section("interceptableAttackers：非 PC 需要「攔截例外」被動");
+    {
+      const npc = mkEntity({ id: "npc", name: "小怪", isPC: false, dex: 90 });
+      const pc = mkEntity({ id: "pc", name: "玩家", isPC: true, dex: 10 });
+      eq(T.interceptableAttackers(npc, [npc, pc]).length, 0,
+        "一般 NPC → 空陣列（方向限制，與 buildPairing 一致）");
+
+      const special = mkEntity({ id: "sp", name: "守護者", isPC: false, dex: 90,
+        passives: ["demo_ic_override"] });
+      global.Passives.register({
+        id: "demo_ic_override", name: "測試用攔截例外", kind: "buff",
+        allowsInterceptingPlayers: true
+      });
+      eq(T.interceptableAttackers(special, [special, pc]).map(function (x) { return x.id; }), ["pc"],
+        "帶「攔截例外」被動的 NPC → 列得出來");
+    }
+
+    section("⚠ 防漂移：選單列得出來的人，buildPairing 一定不會打回票");
+    {
+      // 這條是這次改動的核心保證 —— UI 與引擎的判斷必須同源，不能各寫一份
+      const hero = mkEntity({ id: "hero", name: "攔截者", isPC: true, dex: 70, canAct: true });
+      const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, dex: 20, canAct: true });
+      const foes = [50, 65, 70, 85].map(function (d, i) {
+        return mkEntity({ id: "f" + i, name: "敵" + d, isPC: false, dex: d, canAct: true });
+      });
+      const sk = mkSkill({ id: "s1", coins: ["normal"] });
+      const all = [hero, ally].concat(foes);
+      all.forEach(function (e) { e.skillLibrary = [sk]; });
+
+      const listed = T.interceptableAttackers(hero, all);
+      eq(listed.map(function (x) { return x.dex; }), [50, 65], "70 只攔得到 50 與 65");
+
+      listed.forEach(function (foe) {
+        all.forEach(function (e) { e.declarations = []; });
+        foe.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+        hero.declarations = [{ slotIndex: 0, skillId: "s1", action: "intercept",
+          targetId: foe.id, protectId: "ally" }];
+        const p = T.buildPairing({ entities: all, turnOrder: all });
+        eq(p.notes.some(function (n) { return !n.ok; }), false,
+          "對「敵" + foe.dex + "」宣告攔截 → 沒有任何被拒的 note");
+        eq(p.entries[0].kind, "clash", "對「敵" + foe.dex + "」攔截成立");
+      });
+
+      // 反面：沒被列出來的人，宣告了就會被拒
+      const tooFast = foes[3];   // 85
+      all.forEach(function (e) { e.declarations = []; });
+      tooFast.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+      hero.declarations = [{ slotIndex: 0, skillId: "s1", action: "intercept",
+        targetId: tooFast.id, protectId: "ally" }];
+      const p2 = T.buildPairing({ entities: all, turnOrder: all });
+      eq(p2.notes.some(function (n) { return !n.ok; }), true, "沒列出來的（敵85）宣告了就會被拒");
+    }
+
     // ============================================================
     // 本回合變化（_turnLog）
     // ============================================================
