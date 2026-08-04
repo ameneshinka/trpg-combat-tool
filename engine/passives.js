@@ -340,10 +340,7 @@
       const allies = ctx.allies(false);
       if (!allies.length) return;
       if (!allies.every(function (a) { return ctx.S.layerOf(a, mark) > 0; })) return;
-      allies.forEach(function (a) {
-        const st = ctx.S.ensure(a, mark);
-        st.layer = 0; st.level = 0;
-      });
+      allies.forEach(function (a) { ctx.S.zeroState(a, mark, "集滿換〈爆裂綻放〉"); });
       ctx.apply(ctx.self, "爆裂綻放", 1, 0, { isMark: true, noDecay: true, maxLayer: 1 });
       ctx.log("〈" + this.name + "〉全體友方都帶著〈" + mark + "〉→ 全部歸零，" +
         ctx.self.name + " 獲得〈爆裂綻放〉！");
@@ -369,15 +366,13 @@
       ctx.grant(ctx.self, "bloom", "凝神", 0, w);            // 級數（層數為 0 時會被丟棄 —— 裁決 18）
       ctx.grant(ctx.self, "bloom", "傷害強化", w, 0);        // ⚠ 吃 16 層上限（裁決 22）
       ctx.grant(ctx.self, "bloom", "強壯", Math.floor(w / 2), 0);  // 「一半」無條件捨去
-      const st = ctx.S.ensure(ctx.self, "虛弱");
-      st.layer = 0; st.level = 0;
+      ctx.S.zeroState(ctx.self, "虛弱", "〈爆裂綻放〉兌換");
       ctx.log("　→【虛弱】層數歸零");
     },
     onTurnEnd: function (ctx) {
       if (ctx.S.layerOf(ctx.self, "爆裂綻放") <= 0 && !(ctx.self._grants || {}).bloom) return;
       ctx.revoke("bloom");
-      const st = ctx.S.ensure(ctx.self, "爆裂綻放");
-      st.layer = 0; st.level = 0;
+      ctx.S.zeroState(ctx.self, "爆裂綻放", "回合結束收回");
       ctx.log("〈" + this.name + "〉回合結束 → 標記與臨時增益一併收回");
     }
   });
@@ -485,8 +480,7 @@
       const need = ctx.tuning.vibrateThreshold || 17;
       const n = ctx.S.layerOf(ctx.self, mark);
       if (n < need) return;
-      const st = ctx.S.ensure(ctx.self, mark);
-      st.layer = 0; st.level = 0;
+      ctx.S.zeroState(ctx.self, mark, "〈振刀〉歸零換《肉斬骨斷》");
       // 裁決 27／31：直接可用、不受抽選限制、只有本回合、沒用到就白費
       ctx.self.tempSkillIds = [ctx.tuning.vibrateSkillId || "a_d"];
       ctx.log("〈" + this.name + "〉" + mark + " 達 " + n + " 層 → 歸零，本回合解鎖《肉斬骨斷》" +
@@ -615,8 +609,7 @@
     onBattleRoundStart: function (ctx) {
       const key = ctx.tuning.medicineKey || "茶乃的秘方藥";
       const max = ctx.tuning.medicineMax || 5;
-      const st = ctx.S.ensure(ctx.self, key);
-      st.layer = 0;
+      ctx.S.zeroState(ctx.self, key, "戰鬥輪開始重置");
       ctx.apply(ctx.self, key, max, 0, { isMark: true, noDecay: true, maxLayer: max });
     },
     // 裁決 37：兩個效果都讓玩家選 → 寫成 generator，在每次技能結算完檢查

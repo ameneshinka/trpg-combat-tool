@@ -1497,6 +1497,152 @@
       eq(m.focus > 0, true, "拚贏 → 專注力 +5（含拚點本身的專注力結算）");
     }
 
+    // ============================================================
+    // 攔截：比攻擊者（裁決 44）＋ 照宣告綁定（裁決 45）
+    // ============================================================
+    function icBattle(o) {
+      const atkr = mkEntity({ id: "atkr", name: "攻擊者", isPC: false, dex: o.attackerDex, canAct: true });
+      const ally = mkEntity({ id: "ally", name: "被保護者", isPC: true, dex: o.allyDex, canAct: true });
+      const hero = mkEntity({ id: "hero", name: "攔截者", isPC: true, dex: o.heroDex, canAct: true });
+      const sk = mkSkill({ id: "s1", coins: ["normal"] });
+      [atkr, ally, hero].forEach(function (e) { e.skillLibrary = [sk]; });
+      atkr.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+      hero.declarations = [{ slotIndex: 0, skillId: "s1", action: "intercept",
+        targetId: o.named === undefined ? "atkr" : o.named, protectId: "ally" }];
+      return { entities: [atkr, ally, hero], turnOrder: [hero, atkr, ally] };
+    }
+
+    section("攔截：比的是「攻擊者」，不是被保護的隊友（裁決 44）");
+    {
+      // ⚠ 這兩個案例正好能區分新舊讀法 —— 舊版（比被保護者）會得到相反的結果
+      const slowVsFast = T.buildPairing(icBattle({ heroDex: 65, attackerDex: 90, allyDex: 50 }));
+      eq(slowVsFast.entries[0].kind, "unilateral",
+        "攔截者65 < 攻擊者90（但 > 被保護者50）→ 被拒（舊讀法會成立）");
+      eq(slowVsFast.notes.some(function (n) { return !n.ok && /攻擊者/.test(n.text); }), true,
+        "被拒的理由指向攻擊者");
+
+      const fastVsSlow = T.buildPairing(icBattle({ heroDex: 65, attackerDex: 50, allyDex: 90 }));
+      eq(fastVsSlow.entries[0].kind, "clash",
+        "攔截者65 > 攻擊者50（但 < 被保護者90）→ 成立（舊讀法會被拒）");
+      eq(fastVsSlow.entries[0].bEntityId, "hero", "拚點對手換成攔截者");
+
+      const tie = T.buildPairing(icBattle({ heroDex: 65, attackerDex: 65, allyDex: 10 }));
+      eq(tie.entries[0].kind, "unilateral", "與攻擊者相等 → 被拒（嚴格大於）");
+    }
+
+    section("攔截：讀的是有效 DEX（迅捷／綁縛會改變結果）");
+    {
+      const b = icBattle({ heroDex: 60, attackerDex: 65, allyDex: 50 });
+      eq(T.buildPairing(b).entries[0].kind, "unilateral", "60 < 65 → 被拒");
+
+      S.apply(b.entities[2], "迅捷", 2, 0);      // 攔截者 60 × 1.10 = 66
+      eq(T.buildPairing(b).entries[0].kind, "clash", "攔截者吃 2 層迅捷 → 66 > 65 → 成立");
+
+      const b2 = icBattle({ heroDex: 60, attackerDex: 65, allyDex: 50 });
+      S.apply(b2.entities[0], "綁縛", 2, 0);     // 攻擊者 65 × 0.90 = 58.5
+      eq(T.buildPairing(b2).entries[0].kind, "clash", "攻擊者被壓 2 層綁縛 → 58.5 < 60 → 成立");
+    }
+
+    section("攔截：照宣告綁定，不會被綁到別的攻擊者身上（裁決 45）");
+    {
+      function twoAttackers(namedId) {
+        const fast = mkEntity({ id: "fast", name: "快敵", isPC: false, dex: 40, canAct: true });
+        const slow = mkEntity({ id: "slow", name: "慢敵", isPC: false, dex: 20, canAct: true });
+        const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, dex: 10, canAct: true });
+        const hero = mkEntity({ id: "hero", name: "攔截者", isPC: true, dex: 50, canAct: true });
+        const sk = mkSkill({ id: "s1", coins: ["normal"] });
+        [fast, slow, ally, hero].forEach(function (e) { e.skillLibrary = [sk]; });
+        fast.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+        slow.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+        hero.declarations = [{ slotIndex: 0, skillId: "s1", action: "intercept",
+          targetId: namedId, protectId: "ally" }];
+        return { entities: [fast, slow, ally, hero], turnOrder: [hero, fast, slow, ally] };
+      }
+      const p = T.buildPairing(twoAttackers("slow"));
+      const clash = p.entries.find(function (x) { return x.kind === "clash"; });
+      eq(clash && clash.aEntityId, "slow", "宣告攔慢敵 → 綁到慢敵（舊版會綁到先處理的快敵）");
+      eq(p.entries.filter(function (x) { return x.kind === "unilateral"; })[0].aEntityId, "fast",
+        "快敵變成單方面攻擊");
+
+      const p2 = T.buildPairing(twoAttackers(""));
+      eq(p2.entries.some(function (x) { return x.kind === "clash"; }), true,
+        "留空（任何人）→ 照樣攔得到");
+    }
+
+    section("攔截：指名的攻擊者沒出手 → 退回攔任何人");
+    {
+      const other = mkEntity({ id: "other", name: "沒出手的敵人", isPC: false, dex: 20, canAct: true });
+      const b = icBattle({ heroDex: 90, attackerDex: 40, allyDex: 10, named: "other" });
+      b.entities.push(other);
+      const p = T.buildPairing(b);
+      eq(p.entries[0].kind, "clash", "指名的人本回合沒攻擊 → 退回攔實際打過來的那個");
+      eq(p.notes.some(function (n) { return n.ok && /未指名|任何打他的人/.test(n.text); }), true,
+        "note 標明是退回行為");
+    }
+
+    section("攔截：指名的人有出手但 DEX 不夠 → 直接失敗，不會改攔別人");
+    {
+      const fast = mkEntity({ id: "fast", name: "快敵", isPC: false, dex: 90, canAct: true });
+      const slow = mkEntity({ id: "slow", name: "慢敵", isPC: false, dex: 10, canAct: true });
+      const ally = mkEntity({ id: "ally", name: "隊友", isPC: true, dex: 5, canAct: true });
+      const hero = mkEntity({ id: "hero", name: "攔截者", isPC: true, dex: 50, canAct: true });
+      const sk = mkSkill({ id: "s1", coins: ["normal"] });
+      [fast, slow, ally, hero].forEach(function (e) { e.skillLibrary = [sk]; });
+      fast.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+      slow.declarations = [{ slotIndex: 0, skillId: "s1", action: "attack", targetId: "ally" }];
+      hero.declarations = [{ slotIndex: 0, skillId: "s1", action: "intercept",
+        targetId: "fast", protectId: "ally" }];   // 指名快敵，但 50 < 90
+      const p = T.buildPairing({ entities: [fast, slow, ally, hero], turnOrder: [hero, fast, slow, ally] });
+      eq(p.entries.some(function (x) { return x.kind === "clash"; }), false,
+        "指名了卻攔不動 → 攔截失敗，不會默默改攔慢敵");
+      eq(p.entries.filter(function (x) { return x.kind === "unilateral"; }).length, 2,
+        "兩個敵人都變成單方面攻擊");
+    }
+
+    // ============================================================
+    // 本回合變化（_turnLog）
+    // ============================================================
+    section("本回合變化：記錄層／級的變動");
+    {
+      const e = mkEntity({ name: "目標" });
+      S.resetTurnLog(e);
+      S.apply(e, "震顫", 1, 3);
+      eq(e._turnLog.length, 2, "一層一級各記一筆");
+      eq(e._turnLog[0], { n: "震顫", dl: 1 }, "層數變化");
+      eq(e._turnLog[1], { n: "震顫", dv: 3 }, "級數變化");
+    }
+
+    section("本回合變化：級數被丟棄也要留紀錄（最容易被誤會的情況）");
+    {
+      const e = mkEntity({ name: "乾淨目標" });
+      S.resetTurnLog(e);
+      S.apply(e, "震顫", 0, 3);   // 沒有層數 → 級數被丟棄
+      eq(e._turnLog.length, 1, "記了一筆");
+      eq(!!e._turnLog[0].note, true, "有說明為什麼被丟棄");
+      eq(/層數為 0/.test(e._turnLog[0].note), true, "理由是層數為 0");
+    }
+
+    section("本回合變化：階段六褪掉也會被記到，且回合開始才重置");
+    {
+      const e = mkEntity({ name: "目標" });
+      S.resetTurnLog(e);
+      S.apply(e, "震顫", 1, 3);
+      runGen(T.runTurnEndPhase([e], []));
+      eq(S.layerOf(e, "震顫"), 0, "1 層在回合結束當場褪光（規則如此）");
+      const net = e._turnLog.reduce(function (a, x) { return a + (x.dl || 0); }, 0);
+      eq(net, 0, "流水帳的淨層數變化為 0（貼上 +1、褪掉 −1）");
+      eq(e._turnLog.length >= 3, true, "但過程有被記下來，不是一片空白");
+    }
+
+    section("本回合變化：不影響 states 本身，且可 JSON 序列化");
+    {
+      const e = mkEntity({ name: "目標" });
+      S.resetTurnLog(e);
+      S.apply(e, "易損", 2, 0);
+      eq(S.layerOf(e, "易損"), 2, "狀態值不受流水帳影響");
+      eq(JSON.parse(JSON.stringify(e._turnLog)), e._turnLog, "純值，可送進 Firebase");
+    }
+
     return { pass: pass, fail: fail, failures: failures, lines: lines };
   };
 })(window);

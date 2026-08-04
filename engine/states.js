@@ -82,6 +82,44 @@
    * ⚠ 層數從 ≥1 掉到 0 時，級數同步歸零（terminology.md「級數依附層數」）。
    * opts.exemptThisTurn: 階段六步驟1 才新增的狀態，豁免該次的回合結束層 −1。
    */
+  /**
+   * 本回合的狀態變化流水帳。
+   *
+   * 為什麼需要：規則的「回合中貼上的狀態，回合結束層數 −1」讓 1 層的狀態
+   * 在同一個回合結束時就整個消失（lifecycle.md 的記憶法明講「1 層當場消失」）。
+   * KP 在「開始下一回合」畫面看板子時，剛才貼上的東西早就褪光了，
+   * 看起來就像「技能沒生效」—— 這一區就是要讓那個過程看得見。
+   *
+   * ⚠ 記在 addLayer／addLevel 這兩個唯一關口，所以技能、被動、震顫爆發、
+   *   記帳收回、延遲債務、階段六衰減全部會被記到。
+   * ⚠ 要能 JSON 序列化進 Firebase → 只放短鍵的純值。
+   */
+  function journal(entity, name, dLayer, dLevel, note) {
+    if (!dLayer && !dLevel && !note) return;
+    entity._turnLog = entity._turnLog || [];
+    const e = { n: name };
+    if (dLayer) e.dl = dLayer;
+    if (dLevel) e.dv = dLevel;
+    if (note) e.note = note;
+    entity._turnLog.push(e);
+  }
+  States.journal = journal;
+  States.resetTurnLog = function (entity) { entity._turnLog = []; };
+
+  /**
+   * 把一個狀態整個歸零，並記進本回合流水帳。
+   * ⚠ 不要直接寫 `st.layer = 0` —— 那會繞過流水帳，「本回合變化」就會漏記，
+   *   桌邊看到的數字對不起來（例如震顫被引爆卻看不到級數是怎麼消失的）。
+   */
+  function zeroState(entity, name, note) {
+    const st = ensure(entity, name);
+    const dl = -(st.layer || 0), dv = -(st.level || 0);
+    st.layer = 0; st.level = 0;
+    journal(entity, name, dl, dv, note || null);
+    return st;
+  }
+  States.zeroState = zeroState;
+
   function addLayer(entity, name, delta, opts) {
     opts = opts || {};
     const st = ensure(entity, name);
@@ -91,10 +129,13 @@
     const cap = st.maxLayer !== undefined ? st.maxLayer : LAYER_CAPS[name];
     if (cap !== undefined && next > cap) next = cap;
     if (next < 0) next = 0;
+    const levelBefore = st.level || 0;
     st.layer = next;
     if (before >= 1 && next === 0) st.level = 0; // 級數同步歸零
     if (opts.exemptThisTurn) st.addedThisTurn = true;
     if (States.isBurstTag(name)) { st.isMark = true; st.isBurstTag = true; }
+    journal(entity, name, next - before, (st.level || 0) - levelBefore,
+      (before >= 1 && next === 0 && levelBefore > 0) ? "層數歸零 → 級數同步歸零" : null);
     return st;
   }
 
@@ -117,13 +158,17 @@
       };
     }
     if (delta > 0 && (st.layer || 0) <= 0) {
+      // ⚠ 這是桌邊最容易誤會成「技能沒生效」的情況 → 一定要記進流水帳
+      journal(entity, name, 0, 0, "＋" + delta + " 級被丟棄（層數為 0，級數無法預存）");
       return { dropped: true, reason: "層數為 0，級數無法預存", state: st };
     }
-    let next = (st.level || 0) + delta;
+    const before = st.level || 0;
+    let next = before + delta;
     if (next < 0) next = 0;
     if (next > LEVEL_CAP_DEFAULT) next = LEVEL_CAP_DEFAULT;
     st.level = next;
     if (opts.exemptThisTurn) st.addedThisTurn = true;
+    journal(entity, name, 0, next - before, opts.note || null);
     return { dropped: false, state: st };
   }
 
@@ -433,13 +478,13 @@
     if (lv <= 0) { if (events) events.push("【震顫爆發】：" + target.name + " 無累積的震顫級數，無效果"); return 0; }
     if (events) events.push("【震顫爆發】：" + target.name + " 引爆 " + lv + " 級震顫");
     raiseNearestThreshold(target, lv, events);
-    const st = ensure(target, "震顫");
     // opts.keepLevel：旭技能D 前三枚「此次爆發不會導致級數歸零」（裁決 29）
     // ⚠ 層數照減 −1；層數若因此掉到 0，級數仍會依「級數依附層數」同步歸零
     if (opts.keepLevel) {
       if (events) events.push("（此次爆發不歸零【震顫】級數，保留 " + lv + " 級）");
     } else {
-      st.level = 0;
+      // 走 addLevel 而不是直接指派 → 才會記進「本回合變化」
+      addLevel(target, "震顫", -lv, { note: "引爆" });
     }
     addLayer(target, "震顫", -1);
     return lv;
@@ -467,8 +512,8 @@
       dealDirectDamage(target, amount, "【" + burstName + "】", events); // 再扣血
     }
     // 夥伴與震顫層數歸零（層 →0 會連帶把級數歸零）
-    const ps = ensure(target, partner); ps.layer = 0; ps.level = 0;
-    const ts = ensure(target, "震顫"); ts.layer = 0; ts.level = 0;
+    zeroState(target, partner, "【" + burstName + "】殘響");
+    zeroState(target, "震顫", "【" + burstName + "】殘響");
     if (events) events.push("（〈" + burstName + "〉標記保留，【" + partner + "】與【震顫】層數歸零）");
     return amount;
   }

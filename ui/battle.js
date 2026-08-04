@@ -302,6 +302,12 @@
       const rTarget = row([el("span", { text: "目標／對手：" }), targetSel]);
       const rProtect = row([el("span", { text: "保護誰：" }), protectSel]);
       rProtect.style.display = "none";
+      const icHint = el("p", {
+        cls: "hint",
+        text: "攔截資格：攔截者的有效 DEX 必須「嚴格大於攻擊者」（相等不行）。" +
+          "指名攻擊者就只攔他；留空則攔任何打這位隊友的人。"
+      });
+      icHint.style.display = "none";
 
       /**
        * 目標選單依動作重建 —— 三種動作的「目標」語意完全不同：
@@ -324,6 +330,11 @@
           const anyOpt = el("option", { text: "（任何攻擊我的人）" });
           anyOpt.value = ""; targetSel.appendChild(anyOpt);
         }
+        // 攔截：指名攻擊者 → 只攔他；留空 → 攔任何打這位隊友的人（裁決 45）
+        if (act === "intercept") {
+          const anyOpt = el("option", { text: "（任何攻擊他的人）" });
+          anyOpt.value = ""; targetSel.appendChild(anyOpt);
+        }
         const list = (act === "attack" || act === "intercept")
           ? enemies.concat(alive.filter(function (x) { return enemies.indexOf(x) === -1; }))
           : alive;
@@ -339,6 +350,7 @@
         }
         const ic = act === "intercept";
         rProtect.style.display = ic ? "flex" : "none";
+        icHint.style.display = ic ? "" : "none";
         rTarget.querySelector("span").textContent = ic ? "攔誰的攻擊：" :
           isSupport ? "若被攻擊，跟誰拚點：" :
           act === "defend" ? "應對誰的攻擊：" : "目標／對手：";
@@ -383,6 +395,7 @@
             "若有敵方指定攻擊使用者，必須先拚贏才能繼續使用（拚輸則改為對該敵人施加【恍惚】）。"
         }));
       }
+      box.appendChild(icHint);
       if (req.isDodge) box.appendChild(el("p", { cls: "hint warn-text", text: "⚠ 閃躲失敗會使硬幣損失持續到回合結束 —— 本回合剩下的攻擊都會命中。" }));
       if (req.isGuard) box.appendChild(el("p", { cls: "hint", text: "防守：增加「最終威力 × 5」的臨時生命值（回合結束的傷害結算完之後才歸零）。" }));
 

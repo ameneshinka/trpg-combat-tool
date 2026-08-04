@@ -99,6 +99,17 @@
       card.appendChild(box);
     }
 
+    // 本回合變化：讓「貼上又褪掉」看得見
+    // ⚠ 規則上「回合中貼上的狀態，回合結束層數 −1」→ 1 層的狀態在同一回合結束就整個消失，
+    //   只看上面的「狀態」區會以為技能沒生效（lifecycle.md 的記憶法：「1 層當場消失」）。
+    const changes = summarizeTurnLog(e);
+    if (changes.length) {
+      card.appendChild(el("div", { cls: "sub-label", text: "本回合變化" }));
+      const box = el("div", { cls: "turn-changes" });
+      changes.forEach(function (c) { box.appendChild(el("div", { cls: "chg-row", text: c })); });
+      card.appendChild(box);
+    }
+
     // 本回合抽到／宣告的技能
     if (opts.showActions && e.drawnSkills && e.drawnSkills.length) {
       card.appendChild(el("div", { cls: "sub-label", text: "本回合技能" }));
@@ -125,6 +136,53 @@
     return card;
   }
   Panels.renderEntityCard = renderEntityCard;
+
+  /**
+   * 把 entity._turnLog 的流水帳彙整成「每個狀態一行」。
+   * 顯示淨變化與現值，並在淨變化不為 0 卻已經看不到狀態時標「已褪」——
+   * 那正是「打中了卻好像沒生效」的真相。
+   */
+  function summarizeTurnLog(e) {
+    const log = e._turnLog || [];
+    if (!log.length) return [];
+    // ⚠ 增與減要分開累計 —— 只看淨值的話，「貼上 +1層+3級、回合結束又褪掉」
+    //   會變成「淨變化 0」，等於什麼都沒說。
+    const order = [], agg = {};
+    log.forEach(function (x) {
+      if (!agg[x.n]) { agg[x.n] = { upL: 0, upV: 0, dnL: 0, dnV: 0, notes: [] }; order.push(x.n); }
+      const a = agg[x.n];
+      if (x.dl > 0) a.upL += x.dl; else if (x.dl < 0) a.dnL += -x.dl;
+      if (x.dv > 0) a.upV += x.dv; else if (x.dv < 0) a.dnV += -x.dv;
+      if (x.note && a.notes.indexOf(x.note) === -1) a.notes.push(x.note);
+    });
+    function fmt(l, v, sign) {
+      const p = [];
+      if (l) p.push(sign + l + "層");
+      if (v) p.push(sign + v + "級");
+      return p.join(" ");
+    }
+    const out = [];
+    order.forEach(function (name) {
+      const a = agg[name];
+      const st = (e.states || {})[name];
+      const nowL = st ? (st.layer || 0) : 0;
+      const nowV = st ? (st.level || 0) : 0;
+      const gained = fmt(a.upL, a.upV, "+");
+      const lost = fmt(a.dnL, a.dnV, "−");
+      const parts = [];
+      if (gained) parts.push(lost ? "貼上 " + gained : gained);
+      if (lost) parts.push("褪去 " + lost);
+      if (!parts.length && !a.notes.length) return;
+      let line = name + "　" + parts.join("、");
+      line += " → 現 " + nowL + "層";
+      if (S.hasLevel(name)) line += "·" + nowV + "級";
+      if (nowL === 0 && nowV === 0) line += "（已褪）";
+      if (a.notes.length) line += "　※ " + a.notes.join("；");
+      out.push(line);
+    });
+    return out;
+  }
+  Panels.summarizeTurnLog = summarizeTurnLog;
 
   function stateChip(x, isMark) {
     const st = x.st;

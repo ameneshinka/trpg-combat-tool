@@ -27,9 +27,16 @@
   }
   Turn.computeTurnOrder = computeTurnOrder;
 
-  // 攔截資格：攔截者有效 DEX「嚴格大於」被攔技能當前目標
-  function canIntercept(interceptor, currentTarget) {
-    return S.effectiveDex(interceptor) > S.effectiveDex(currentTarget);
+  /**
+   * 攔截資格：攔截者的有效 DEX「嚴格大於」**攻擊者**（相等不行）。
+   *
+   * ⚠ 這與 lifecycle.md 的字面不同 —— 規則書寫的是「嚴格大於被攔技能當前目標」
+   *   （＝被保護的隊友）。使用者拍板改成比攻擊者：攔截的語意是
+   *   「比對方快，所以橫插得進去」（裁決 44，見 README 的未定義裁決）。
+   * ⚠ 後果：慢角色幾乎攔不到人。以女僕（DEX 65）為例，全隊只有旭（90）攔得到。
+   */
+  function canIntercept(interceptor, attacker) {
+    return S.effectiveDex(interceptor) > S.effectiveDex(attacker);
   }
   Turn.canIntercept = canIntercept;
 
@@ -298,6 +305,8 @@
       e.cantActRestOfTurn = false;
       e.drawnSkills = [];
       e.declarations = [];
+      // 「本回合變化」在這裡才重置 → 上一回合的完整變化在「開始下一回合」畫面上仍看得到
+      S.resetTurnLog(e);
       // 別人記在我身上、之後才結算的效果（和真被動4 的守護債務）
       S.runPendingDebts(e, events);
     });
@@ -469,35 +478,68 @@
       });
     });
 
-    // 攔截判定
-    attacks.forEach(function (atk) {
+    // ---- 攔截判定 ----
+    // ⚠ 兩趟：先讓「有指名攻擊者」的攔截精確綁定，剩下的才退回「攔任何打他的人」。
+    //   舊版只比對 protectId，完全沒讀 decl.targetId → 宣告「攔慢敵」卻被綁到快敵身上（裁決 45）。
+    const rejected = {};   // 同一個攔截宣告的被拒理由只記一次，避免 notes 洗版
+    function rejectOnce(ic, text) {
+      const k = ic.entity.id + "#" + ic.decl.slotIndex;
+      if (rejected[k]) return;
+      rejected[k] = true;
+      notes.push({ ok: false, text: text });
+    }
+
+    /**
+     * 這個攔截宣告指名的攻擊者，本回合有沒有真的攻擊他要保護的那位？
+     * 有 → 他就綁死在那一場，不會被退回趟改分配到別的攻擊者身上
+     *      （指名了卻因為 DEX 不夠被拒 ＝ 攔截失敗，不該默默改攔別人）。
+     */
+    function namedAttackerPresent(ic) {
+      if (!ic.decl.targetId) return false;
+      return attacks.some(function (a) {
+        return a.entity.id === ic.decl.targetId && a.decl.targetId === ic.decl.protectId;
+      });
+    }
+
+    function tryIntercept(atk, exact) {
+      if (atk.pairedWith) return;
       const origTarget = byId[atk.decl.targetId];
       if (!origTarget) return;
       const candidates = intercepts.filter(function (ic) {
         if (ic.consumed) return false;
         if (ic.decl.protectId !== atk.decl.targetId) return false;
+        // 精確趟：只認「指名了這個攻擊者」的宣告
+        // 退回趟：只收「沒指名」或「指名的人本回合根本沒打這位隊友」的宣告
+        if (exact) { if (ic.decl.targetId !== atk.entity.id) return false; }
+        else if (namedAttackerPresent(ic)) return false;
         if (!mayInterceptPlayerSide(ic.entity)) {
-          notes.push({ ok: false, text: "攔截被拒：" + ic.entity.name + " 非玩家方，依規則不能攔截打向玩家的攻擊（且無攔截例外被動）" });
+          rejectOnce(ic, "攔截被拒：" + ic.entity.name + " 非玩家方，依規則不能攔截打向玩家的攻擊（且無攔截例外被動）");
           return false;
         }
-        if (!canIntercept(ic.entity, origTarget)) {
-          notes.push({ ok: false, text: "攔截被拒：" + ic.entity.name + " 的有效 DEX 未「嚴格大於」" + origTarget.name });
+        // ⚠ 裁決 44：比的是「攻擊者」的有效 DEX，不是被保護的隊友
+        if (!canIntercept(ic.entity, atk.entity)) {
+          rejectOnce(ic, "攔截被拒：" + ic.entity.name + "（DEX " + S.effectiveDex(ic.entity).toFixed(1) +
+            "）的有效 DEX 未「嚴格大於」攻擊者 " + atk.entity.name +
+            "（DEX " + S.effectiveDex(atk.entity).toFixed(1) + "）");
           return false;
         }
         return true;
       });
-      if (candidates.length) {
-        // 多人搶攔：DEX 最高者優先（實務上由玩家協調、KP 確認）
-        candidates.sort(function (a, b) { return S.effectiveDex(b.entity) - S.effectiveDex(a.entity); });
-        const win = candidates[0];
-        win.consumed = true;
-        atk.redirectTo = win.entity.id;
-        atk.pairedWith = win;
-        notes.push({ ok: true, text: "攔截成立：" + win.entity.name + "（DEX " + S.effectiveDex(win.entity).toFixed(1) +
-          "）把 " + atk.entity.name + " 對 " + origTarget.name + "（DEX " +
-          S.effectiveDex(origTarget).toFixed(1) + "）的攻擊搶到自己身上" });
-      }
-    });
+      if (!candidates.length) return;
+      // 多人搶攔：DEX 最高者優先（實務上由玩家協調、KP 確認）
+      candidates.sort(function (a, b) { return S.effectiveDex(b.entity) - S.effectiveDex(a.entity); });
+      const win = candidates[0];
+      win.consumed = true;
+      atk.redirectTo = win.entity.id;
+      atk.pairedWith = win;
+      notes.push({ ok: true, text: "攔截成立：" + win.entity.name + "（DEX " + S.effectiveDex(win.entity).toFixed(1) +
+        "）比攻擊者 " + atk.entity.name + "（DEX " + S.effectiveDex(atk.entity).toFixed(1) +
+        "）快 → 把打向 " + origTarget.name + " 的攻擊搶到自己身上" +
+        (exact ? "" : "（未指名攻擊者，攔下任何打他的人）") });
+    }
+
+    attacks.forEach(function (atk) { tryIntercept(atk, true); });    // 精確趟
+    attacks.forEach(function (atk) { tryIntercept(atk, false); });   // 退回趟
 
     const entries = [];
     const usedDecl = {};
