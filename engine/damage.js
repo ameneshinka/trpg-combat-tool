@@ -72,6 +72,13 @@
     let power = basePower;   // 最終威力逐枚累加
     let total = 0;
 
+    // 擲幣動畫用：整把技能的硬幣包成一組
+    // ⚠ 這裡的擲幣是在逐枚迴圈裡 inline 做的（不走 rollAllCoins），所以要自己記。
+    //   迴圈中間可能為了【凝神】1d20 而 yield → 該組會被切成兩批播，可接受。
+    C.beginGroup({ kind: "damage", label: label, who: attacker.name, whoId: attacker.id,
+      targetName: target.name });
+    const flipLog = [];
+
     for (let i = 0; i < rollable.length; i++) {
       if (target.hp <= 0) { events.push(target.name + " 已倒下，停止後續硬幣結算"); break; }
       if (runtime && runtime.stop) break;   // 逐枚鉤子要求中止（例：子彈不足）
@@ -96,6 +103,7 @@
       }
       if (isHead) power += effPower;
       const finalPower = Math.max(0, power); // 最終威力下限 0
+      flipLog.push({ type: coin.type, status: coin.status, head: isHead, effPower: effPower });
 
       // 2. 凝神判定：1D20 < 級數 → 該枚 +30%，然後級數 −2、層數 −1
       let concentrationHit = false;
@@ -167,6 +175,16 @@
       }
     }
 
+    if (flipLog.length) {
+      C.recordRoll({
+        who: attacker.name, whoId: attacker.id,
+        basePower: basePower, coinPower: coinPower,
+        power: hits.length ? hits[hits.length - 1].finalPower : basePower,
+        heads: flipLog.filter(function (f) { return f.head; }).length,
+        coins: flipLog
+      });
+    }
+    C.endGroup();
     return { hits: hits, totalDamage: total, events: events };
   }
   Damage.resolveDamage = resolveDamage;

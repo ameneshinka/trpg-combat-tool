@@ -65,18 +65,39 @@
   }
   Battle.nextTurn = nextTurn;
 
-  function advance(input) {
+  /**
+   * 推進 generator 一步。
+   * ⚠ 改成 async 是因為擲幣動畫要「播完才顯示下一個提示」——
+   *   硬幣是引擎同步擲完的，只能用 Clash 的記錄器事後回放（見 ui/coins.js）。
+   * ⚠ advancing 旗標一律走 finally 釋放：動畫中途出錯若沒放掉，整個戰鬥流程會鎖死。
+   */
+  async function advance(input) {
     if (advancing) return;
     advancing = true;
+    try {
+      await advanceInner(input);
+    } finally {
+      advancing = false;
+    }
+  }
+
+  async function advanceInner(input) {
     let res;
+    global.Clash.startRecording();
     try {
       res = iter.next(input);
     } catch (err) {
+      global.Clash.stopRecording();
       allEvents.push("⚠ 引擎錯誤：" + err.message);
       console.error(err);
       render();
-      advancing = false;
       return;
+    }
+    // 這一步裡擲過的硬幣 → 播成動畫，播完才往下走
+    const flipGroups = global.Clash.stopRecording();
+    if (flipGroups.length && global.Coins) {
+      try { await global.Coins.play(flipGroups); }
+      catch (err) { console.error("擲幣動畫失敗（不影響結算）：", err); }
     }
     if (res.done) {
       pending = null;
@@ -89,14 +110,12 @@
       box.appendChild(btn);
       render();
       publish();
-      advancing = false;
       return;
     }
     pending = res.value;
     render();
     renderPrompt(pending);
     publish();
-    advancing = false;
   }
 
   // 送出去向可被替換：

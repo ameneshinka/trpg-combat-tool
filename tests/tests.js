@@ -1718,6 +1718,90 @@
       eq(JSON.parse(JSON.stringify(e._turnLog)), e._turnLog, "純值，可送進 Firebase");
     }
 
+    // ============================================================
+    // 擲幣記錄器（給 UI 播動畫用）
+    // ============================================================
+    section("擲幣記錄器：預設關閉，不影響任何結算");
+    {
+      // ⚠ 這條是保護傘 —— 記錄器若預設開啟或改動了回傳值，前面幾百項測試會一起壞
+      eq(C.isRecording(), false, "預設不收集");
+      const sk = mkSkill({ coins: ["red", "red", "red", "red"], basePower: 7, coinPower: 3 });
+      const rt = C.makeCoinRuntime(sk);
+      const r = C.rollAllCoins(rt, 7, 3, 0, ALWAYS_HEAD);
+      eq(r.power, 19, "沒開記錄器時，rollAllCoins 的結果與過去完全相同");
+      eq(Object.keys(r).sort(), ["detail", "heads", "power"], "回傳值的欄位沒有被動到");
+      eq(C.stopRecording(), [], "沒開過就 stop → 空陣列，不會炸");
+    }
+
+    section("擲幣記錄器：拚點每次交換記成一組、雙方各一筆");
+    {
+      const a = mkEntity({ id: "a", name: "甲" });
+      const b = mkEntity({ id: "b", name: "乙" });
+      const skA = mkSkill({ id: "sa", coins: ["normal", "normal"], basePower: 5, coinPower: 5 });
+      const skB = mkSkill({ id: "sb", coins: ["red"], basePower: 1, coinPower: 1 });
+
+      C.startRecording();
+      eq(C.isRecording(), true, "startRecording 之後開始收集");
+      const res = C.resolveClash(
+        { entity: a, skill: skA, coinRuntime: C.makeCoinRuntime(skA), basePower: 5 },
+        { entity: b, skill: skB, coinRuntime: C.makeCoinRuntime(skB), basePower: 1 },
+        { rng: ALWAYS_HEAD });
+      const groups = C.stopRecording();
+
+      eq(C.isRecording(), false, "stopRecording 之後關閉");
+      eq(groups.length, res.exchanges, "組數 = 交換次數");
+      eq(groups.every(function (g) { return g.kind === "clash" && g.rolls.length === 2; }), true,
+        "每組兩筆（雙方各一），並標明是拚點");
+      eq(groups[0].rolls.map(function (r) { return r.who; }), ["甲", "乙"], "順序是 A 方在前");
+      eq(groups[0].exchange, 1, "帶交換序號");
+    }
+
+    section("擲幣記錄器：記到的正反面與型別要與實際結算一致");
+    {
+      const e = mkEntity({ name: "擲幣者" });
+      const sk = mkSkill({ coins: ["normal", "red", "green"], basePower: 0, coinPower: 4 });
+      const rt = C.makeCoinRuntime(sk);
+      C.startRecording();
+      const r = C.rollAllCoins(rt, 0, 4, 0, ALWAYS_HEAD, e, []);
+      const g = C.stopRecording();
+      eq(g.length, 1, "沒有明確分組 → 自成一組（例如【防守】的單筆擲幣）");
+      eq(g[0].rolls[0].coins.map(function (c) { return c.type; }), ["normal", "red", "green"],
+        "硬幣型別照序列記下來（UI 靠它上色）");
+      eq(g[0].rolls[0].coins.map(function (c) { return c.head; }), [true, true, true], "正反面一致");
+      eq(g[0].rolls[0].power, r.power, "最終威力與回傳值一致");
+      eq(g[0].rolls[0].who, "擲幣者", "帶擲幣者名字");
+    }
+
+    section("擲幣記錄器：碎幣的狀態要記下來（UI 才畫得出裂痕與 +1）");
+    {
+      const sk = mkSkill({ coins: ["red", "red"], basePower: 7, coinPower: 9 });
+      const rt = C.makeCoinRuntime(sk);
+      C.degradeFirstIntact(rt);   // 第一枚碎幣
+      C.startRecording();
+      C.rollAllCoins(rt, 7, 9, 0, ALWAYS_HEAD, mkEntity(), []);
+      const g = C.stopRecording();
+      const coins = g[0].rolls[0].coins;
+      eq(coins[0].status, C.SHATTERED, "碎掉的那枚有記到狀態");
+      eq(coins[0].effPower, 1, "碎幣的有效幣威是 1（UI 的「+1」標記就是這個）");
+      eq(coins[1].status, C.INTACT, "另一枚仍完好");
+    }
+
+    section("擲幣記錄器：傷害結算的硬幣也記得到");
+    {
+      const atk = mkEntity({ id: "atk", name: "攻方" });
+      const tgt = mkEntity({ id: "t", name: "目標", hp: 9999, maxHp: 9999 });
+      const sk = mkSkill({ coins: ["normal", "normal"], basePower: 5, coinPower: 5 });
+      C.startRecording();
+      runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 5, 5, "測試技", {
+        rng: ALWAYS_HEAD, damageMultiplier: 1
+      }));
+      const g = C.stopRecording();
+      eq(g.length, 1, "整把技能包成一組");
+      eq(g[0].kind, "damage", "標明是傷害結算");
+      eq(g[0].label, "測試技", "帶技能名");
+      eq(g[0].rolls[0].coins.length, 2, "兩枚硬幣都記到");
+    }
+
     return { pass: pass, fail: fail, failures: failures, lines: lines };
   };
 })(window);

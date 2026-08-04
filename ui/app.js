@@ -260,6 +260,13 @@
     document.querySelectorAll('input[name="mode"]').forEach(function (r) {
       r.addEventListener("change", function () { applyMode(this.value); });
     });
+    // 擲幣動畫的常駐開關（「跳過」只跳當下那一次；長時間帶團想整場關掉用這個）
+    const animToggle = $("#animToggle");
+    if (animToggle && global.Coins) {
+      animToggle.checked = global.Coins.isEnabled();
+      animToggle.addEventListener("change", function () { global.Coins.setEnabled(this.checked); });
+    }
+
     $("#genRoomBtn").addEventListener("click", genRoom);
     $("#joinBtn").addEventListener("click", joinAsPlayer);
     $("#startBtn").addEventListener("click", function () {

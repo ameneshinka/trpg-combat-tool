@@ -87,6 +87,11 @@ header {
 }
 header h1 { font-size: var(--text-md); font-weight: 600; margin: 0; letter-spacing: .02em; color: var(--color-foreground-strong); }
 .header-right { display: flex; align-items: center; gap: var(--space-3); }
+.anim-toggle {
+  display: flex; align-items: center; gap: 5px;
+  font-size: var(--text-xs); color: var(--color-muted-fg); cursor: pointer;
+}
+.anim-toggle input { width: 14px; height: 14px; min-height: 0; accent-color: var(--color-primary); }
 #turnRoundIndicator { font-weight: 600; font-size: var(--text-sm); color: var(--color-accent-fg); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .conn-state {
   font-size: var(--text-xs);
@@ -697,6 +702,104 @@ button.warn-btn:hover { background: rgba(245,158,11,.12); }
 .entity-panels.compact .entity-card { padding: var(--space-2) var(--space-3); }
 .entity-panels.compact .entity-card .name { font-size: var(--text-base); }
 .entity-panels.compact .bar-wrap { height: 13px; }
+
+/* ============ 擲硬幣動畫 ============ */
+:root {
+  /* 正面／反面色號（使用者指定；綠幣是我依同樣的亮/暗對比補的） */
+  --coin-normal-head: #F7D443;
+  --coin-normal-tail: #9c7310;
+  --coin-red-head:    #FF2400;
+  --coin-red-tail:    #7B1818;
+  --coin-green-head:  #3FCF6B;
+  --coin-green-tail:  #1F6B39;
+}
+
+.coin-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2, 6, 23, .72);
+  backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+.coin-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-4);
+  min-width: min(560px, 92vw); max-width: 92vw;
+}
+.coin-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.coin-title { font-weight: 600; color: var(--color-foreground-strong); font-size: var(--text-md); }
+.coin-skip {
+  border-color: var(--color-border-strong); font-size: var(--text-sm);
+  padding: 6px 12px; min-height: 32px;
+}
+.coin-body {
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--space-4); flex-wrap: wrap;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.coin-side {
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
+  padding: var(--space-3); border-radius: var(--radius-md);
+  border: 1px solid transparent; min-width: 140px;
+}
+.coin-side.win { border-color: var(--color-primary); background: rgba(124, 58, 237, .10); }
+.coin-who { font-weight: 600; font-size: var(--text-sm); color: var(--color-foreground-strong); }
+.coin-power { font-size: var(--text-sm); font-family: var(--font-mono); color: var(--color-muted-fg); }
+.coin-vs { font-family: var(--font-mono); color: var(--color-muted-fg); font-size: var(--text-sm); }
+.coin-counter { text-align: right; font-size: var(--text-xs); color: var(--color-muted-fg); font-family: var(--font-mono); }
+.coin-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+.coin-flip {
+  position: relative;
+  width: 46px; height: 46px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 18px; color: #0B1120;
+  border: 2px solid rgba(0, 0, 0, .35);
+  box-shadow: inset 0 -3px 6px rgba(0, 0, 0, .25);
+}
+.coin-flip[data-type="normal"][data-face="head"] { background: var(--coin-normal-head); }
+.coin-flip[data-type="normal"][data-face="tail"] { background: var(--coin-normal-tail); }
+.coin-flip[data-type="red"][data-face="head"]    { background: var(--coin-red-head); }
+.coin-flip[data-type="red"][data-face="tail"]    { background: var(--coin-red-tail); }
+.coin-flip[data-type="green"][data-face="head"]  { background: var(--coin-green-head); }
+.coin-flip[data-type="green"][data-face="tail"]  { background: var(--coin-green-tail); }
+/* 反面與紅幣的底色偏暗 → 字改成亮色才看得清楚 */
+.coin-flip[data-face="tail"], .coin-flip[data-type="red"] { color: #FFF3E0; }
+
+/* 碎幣：保留紅色，加裂痕與 +1（它的有效幣威已經變成 1） */
+.coin-flip[data-shattered] { border-style: dashed; }
+.coin-flip[data-shattered]::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: linear-gradient(105deg, transparent 44%, rgba(0,0,0,.65) 46%,
+              rgba(0,0,0,.65) 50%, transparent 52%,
+              transparent 62%, rgba(0,0,0,.5) 64%, rgba(0,0,0,.5) 67%, transparent 69%);
+}
+.coin-badge {
+  position: absolute; right: -6px; bottom: -6px;
+  background: var(--color-surface-2); color: var(--color-foreground);
+  border: 1px solid var(--color-border-strong); border-radius: 999px;
+  font-size: 10px; font-family: var(--font-mono); padding: 0 4px; line-height: 15px;
+}
+
+.coin-flip[data-spinning] { animation: coin-spin 260ms linear infinite; }
+@keyframes coin-spin {
+  0%   { transform: rotateY(0deg)   scaleX(1); }
+  50%  { transform: rotateY(90deg)  scaleX(.15); }
+  100% { transform: rotateY(180deg) scaleX(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coin-flip[data-spinning] { animation: none; }
+}
+@media (max-width: 768px) {
+  .coin-panel { min-width: 0; width: 100%; padding: var(--space-3); }
+  .coin-body { gap: var(--space-2); }
+  .coin-side { min-width: 0; padding: var(--space-2); }
+  .coin-flip { width: 38px; height: 38px; font-size: 15px; }
+  .coin-skip { min-height: 44px; }
+}
 
 /* 本回合變化：讓「回合中貼上、回合結束就褪掉」的狀態看得見 */
 .turn-changes {

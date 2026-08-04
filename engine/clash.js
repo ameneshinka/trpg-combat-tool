@@ -41,6 +41,39 @@
   Clash.rollableCoins = function (rt) { return rt.filter(notLost); };
   Clash.hasIntact = function (rt) { return rt.some(isIntact); };
 
+  // ---------------- 擲幣記錄器（給 UI 播動畫用） ----------------
+  /**
+   * 硬幣是「程式自動擲」的，而且一整場拚點是在 generator 的同一步裡同步跑完
+   * （resolveClash 中間不 yield）→ UI 沒辦法插在中間演動畫。
+   * 所以改成「記錄後回放」：這裡把每次擲幣記下來，UI 在那一步結束後播成動畫。
+   *
+   * ⚠ 預設關閉 —— 沒呼叫 startRecording 就完全不收集，引擎行為與沒有這層時一模一樣。
+   */
+  let recorder = null;
+  let pendingGroup = null;
+
+  Clash.startRecording = function () { recorder = []; pendingGroup = null; return recorder; };
+  Clash.stopRecording = function () {
+    const r = recorder || [];
+    recorder = null; pendingGroup = null;
+    return r;
+  };
+  Clash.isRecording = function () { return !!recorder; };
+  /** 開一個顯示群組：同一次拚點交換的雙方兩筆會合成一組，UI 才能並排對比。 */
+  Clash.beginGroup = function (meta) {
+    if (!recorder) return;
+    pendingGroup = Object.assign({ rolls: [] }, meta || {});
+    recorder.push(pendingGroup);
+  };
+  Clash.endGroup = function () { pendingGroup = null; };
+  /** 記一筆擲幣。沒有明確分組時自成一組（例如【防守】的單筆擲幣）。 */
+  function recordRoll(entry) {
+    if (!recorder) return;
+    if (!pendingGroup) { pendingGroup = { rolls: [] }; recorder.push(pendingGroup); }
+    pendingGroup.rolls.push(entry);
+  }
+  Clash.recordRoll = recordRoll;
+
   // ---------------- 擲幣 ----------------
   // 可注入 rng 以利測試（預設 Math.random）
   function flip(prob, rng) { return (rng || Math.random)() < prob; }
@@ -70,7 +103,16 @@
       if (isHead) { power += eff; heads++; }
       detail.push({ index: i, type: c.type, status: c.status, head: isHead, effPower: eff });
     });
-    return { power: Math.max(0, power), heads: heads, detail: detail };
+    const result = { power: Math.max(0, power), heads: heads, detail: detail };
+    recordRoll({
+      who: entity ? entity.name : "", whoId: entity ? entity.id : null,
+      basePower: basePower, coinPower: skillCoinPower,
+      power: result.power, heads: heads,
+      coins: detail.map(function (d) {
+        return { type: d.type, status: d.status, head: d.head, effPower: d.effPower };
+      })
+    });
+    return result;
   }
   Clash.rollAllCoins = rollAllCoins;
 
@@ -154,8 +196,11 @@
       S.onExchangeTriggers(sideA.entity, events);
       S.onExchangeTriggers(sideB.entity, events);
 
+      // 同一次交換的雙方兩筆合成一組 → UI 才能並排對比、看出誰的最終威力比較高
+      Clash.beginGroup({ kind: "clash", exchange: k, aName: nameA, bName: nameB });
       const rollA = rollAllCoins(sideA.coinRuntime, sideA.basePower, cpA, focusA, rng, sideA.entity, events);
       const rollB = rollAllCoins(sideB.coinRuntime, sideB.basePower, cpB, focusB, rng, sideB.entity, events);
+      Clash.endGroup();
 
       events.push("交換 #" + k + "：" + nameA + " 正面 " + rollA.heads + "／" + rollA.detail.length +
         " → 最終威力 " + rollA.power + "　vs　" + nameB + " 正面 " + rollB.heads + "／" + rollB.detail.length +
