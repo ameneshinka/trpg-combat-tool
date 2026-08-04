@@ -303,10 +303,21 @@
   States.runPendingDebts = runPendingDebts;
 
   // ---------------- 持續生效狀態的讀值 ----------------
+  // 【迅捷】【綁縛】每層 ±5「點」DEX（裁決 54）。
+  // ⚠ trpg-clash-rules 的 states.md 寫的是「DEX ± 層×5%」—— 那是受 COC 角色卡書寫
+  //   習慣影響的筆誤，設計原意是定值加減。工具以此為準，見 README 的裁決清單。
+  // ⚠ 定值加減對「低 DEX 角色」的相對影響大得多：
+  //   旭 90 吃 5 層迅捷 舊 112.5／新 115（差不多）；
+  //   哥布林 40 吃 10 層綁縛 舊 20／新 −10 → 所以要有下限。
+  const DEX_PER_LAYER = 5;
+  const DEX_FLOOR = 1;        // 裁決 55：再怎麼壓也不會變成 0 或負數
+  States.DEX_PER_LAYER = DEX_PER_LAYER;
+  States.DEX_FLOOR = DEX_FLOOR;
+
   function effectiveDex(entity) {
     const swift = layerOf(entity, "迅捷");
     const bind = layerOf(entity, "綁縛");
-    return entity.dex * (1 + 0.05 * swift - 0.05 * bind);
+    return Math.max(DEX_FLOOR, entity.dex + DEX_PER_LAYER * (swift - bind));
   }
 
   // 強壯／虛弱改基礎威力（拚點與傷害都吃）；屏息／遲鈍只改防禦型
@@ -529,5 +540,23 @@
     return Math.max(0.10, Math.min(0.90, 0.5 + (focus || 0) / 100));
   }
   States.headsProbability = headsProbability;
+
+  /**
+   * 擲一次 1d100 決定硬幣正反面（COC 式呈現，裁決 53）。
+   *
+   * 為什麼要這樣呈現：玩家連續看到反面時會懷疑系統寫錯，而只顯示「正／反」
+   * 事後無從驗證。給出數字與門檻，玩家自己就能確認機率確實對應當前專注力。
+   *
+   * ⚠ 機率與舊寫法「完全相同」，不是近似：
+   *   專注力是 −40~+40 的整數 → 門檻 = 50 + 專注力，恆為 10~90 的整數
+   *   → 「擲 1~62」共 62 個數字 = 62%，等同於 Math.random() < 0.62
+   * ⚠ 門檻要 Math.round —— 0.5 + 12/100 在浮點下是 0.6200000000000001
+   */
+  function rollD100(focus, rng) {
+    const threshold = Math.round(headsProbability(focus) * 100);
+    const roll = 1 + Math.floor((rng || Math.random)() * 100);
+    return { roll: roll, threshold: threshold, head: roll <= threshold };
+  }
+  States.rollD100 = rollD100;
 
 })(window);

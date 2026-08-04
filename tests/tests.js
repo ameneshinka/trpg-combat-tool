@@ -354,12 +354,12 @@
       const a = mkEntity({ id: "a", name: "快", isPC: true, dex: 20 });
       const b = mkEntity({ id: "b", name: "中", isPC: false, dex: 15 });
       const c = mkEntity({ id: "c", name: "慢", isPC: true, dex: 8 });
-      S.addLayer(c, "迅捷", 10); // 8 × 1.5 = 12
+      S.addLayer(c, "迅捷", 2); // 8 + 2×5 = 18 → 超車「中」
       const order = T.computeTurnOrder([a, b, c]);
-      eq(order.map(function (x) { return x.id; }), ["a", "b", "c"],
-        "依有效 DEX 排序（敵我混排）：快20 > 中15 > 慢12");
-      S.addLayer(a, "綁縛", 10); // 20 × 0.5 = 10
-      eq(order.map(function (x) { return x.id; }), ["a", "b", "c"],
+      eq(order.map(function (x) { return x.id; }), ["a", "c", "b"],
+        "依有效 DEX 排序（敵我混排）：快20 > 慢+迅捷18 > 中15");
+      S.addLayer(a, "綁縛", 10); // 20 − 50 → 下限 1
+      eq(order.map(function (x) { return x.id; }), ["a", "c", "b"],
         "回合中途 DEX 改變，本回合順序不變（快照）");
     }
 
@@ -1042,7 +1042,7 @@
       eq(Ch.pcRoster().map(function (p) { return p.name + p.dex; }),
         ["威爾‧賽爾弗特65", "夜櫻結月60", "渡邊旭90", "霧島和真50"], "四名 PC 的 DEX");
       S.apply(gob, "迅捷", 5, 0);
-      eq(S.effectiveDex(gob), 40 * 1.25, "迅捷是百分比，換尺度後照常運作");
+      eq(S.effectiveDex(gob), 65, "迅捷每層 +5 點 → 40 + 25 = 65（裁決 54）");
     }
 
     // ============================================================
@@ -1448,7 +1448,7 @@
       runGen(T.beginSkillUse(m, skB, will, battle, []));
       eq(m.focus, 0, "65 vs 65「不大於」→ 條件不成立，不加專注力");
 
-      // 對方吃 2 層綁縛 → 有效 DEX 65 × 0.9 = 58.5 → 成立
+      // 對方吃 2 層綁縛 → 有效 DEX 65 − 10 = 55 → 成立
       S.apply(will, "綁縛", 2, 0);
       runGen(T.beginSkillUse(m, skB, will, battle, []));
       eq(m.focus, 5, "壓了綁縛之後成立 → 專注力 +5");
@@ -1458,7 +1458,7 @@
       const b2 = mkBattle([m2, will2]);
       S.apply(m2, "迅捷", 1, 0);
       runGen(T.beginSkillUse(m2, skB, will2, b2, []));
-      eq(m2.focus, 5, "自己疊迅捷（65×1.05）也能讓條件成立");
+      eq(m2.focus, 5, "自己疊迅捷（65+5=70）也能讓條件成立");
 
       // 技能C 的版本：成立時給對方 1 層傷害弱化
       const m3 = maid(), kaz = pc("pc_kazuma");   // DEX 50，穩定成立
@@ -1535,12 +1535,12 @@
       const b = icBattle({ heroDex: 60, attackerDex: 65, allyDex: 50 });
       eq(T.buildPairing(b).entries[0].kind, "unilateral", "60 < 65 → 被拒");
 
-      S.apply(b.entities[2], "迅捷", 2, 0);      // 攔截者 60 × 1.10 = 66
-      eq(T.buildPairing(b).entries[0].kind, "clash", "攔截者吃 2 層迅捷 → 66 > 65 → 成立");
+      S.apply(b.entities[2], "迅捷", 2, 0);      // 攔截者 60 + 10 = 70
+      eq(T.buildPairing(b).entries[0].kind, "clash", "攔截者吃 2 層迅捷 → 70 > 65 → 成立");
 
       const b2 = icBattle({ heroDex: 60, attackerDex: 65, allyDex: 50 });
-      S.apply(b2.entities[0], "綁縛", 2, 0);     // 攻擊者 65 × 0.90 = 58.5
-      eq(T.buildPairing(b2).entries[0].kind, "clash", "攻擊者被壓 2 層綁縛 → 58.5 < 60 → 成立");
+      S.apply(b2.entities[0], "綁縛", 2, 0);     // 攻擊者 65 − 10 = 55
+      eq(T.buildPairing(b2).entries[0].kind, "clash", "攻擊者被壓 2 層綁縛 → 55 < 60 → 成立");
     }
 
     section("攔截：照宣告綁定，不會被綁到別的攻擊者身上（裁決 45）");
@@ -1612,11 +1612,11 @@
       eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow"],
         "只有比自己慢的敵人：同速（嚴格大於）、更快、倒下、隊友、自己 全部排除");
 
-      S.apply(hero, "迅捷", 2, 0);   // 65 × 1.10 = 71.5
+      S.apply(hero, "迅捷", 2, 0);   // 65 + 10 = 75
       eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow", "tie"],
         "自己吃 2 層迅捷 → 同速敵也攔得到（讀的是有效 DEX）");
 
-      S.apply(fastFoe, "綁縛", 6, 0); // 90 × 0.70 = 63
+      S.apply(fastFoe, "綁縛", 6, 0); // 90 − 30 = 60
       eq(T.interceptableAttackers(hero, all).map(function (x) { return x.id; }), ["slow", "tie", "fast"],
         "快敵被壓 6 層綁縛 → 也攔得到");
     }
@@ -1630,10 +1630,13 @@
 
       const special = mkEntity({ id: "sp", name: "守護者", isPC: false, dex: 90,
         passives: ["demo_ic_override"] });
-      global.Passives.register({
-        id: "demo_ic_override", name: "測試用攔截例外", kind: "buff",
-        allowsInterceptingPlayers: true
-      });
+      // ⚠ 只註冊一次 —— runTests() 可能被重複呼叫（例如在 console 裡再跑一次查失敗清單）
+      if (!global.Passives.get("demo_ic_override")) {
+        global.Passives.register({
+          id: "demo_ic_override", name: "測試用攔截例外", kind: "buff",
+          allowsInterceptingPlayers: true
+        });
+      }
       eq(T.interceptableAttackers(special, [special, pc]).map(function (x) { return x.id; }), ["pc"],
         "帶「攔截例外」被動的 NPC → 列得出來");
     }
@@ -1728,8 +1731,9 @@
       const sk = mkSkill({ coins: ["red", "red", "red", "red"], basePower: 7, coinPower: 3 });
       const rt = C.makeCoinRuntime(sk);
       const r = C.rollAllCoins(rt, 7, 3, 0, ALWAYS_HEAD);
-      eq(r.power, 19, "沒開記錄器時，rollAllCoins 的結果與過去完全相同");
-      eq(Object.keys(r).sort(), ["detail", "heads", "power"], "回傳值的欄位沒有被動到");
+      eq(r.power, 19, "沒開記錄器時，rollAllCoins 的結算結果與過去完全相同");
+      eq(Object.keys(r).sort(), ["detail", "heads", "power", "threshold"],
+        "回傳值只多了 threshold（d100 呈現用），power/heads/detail 都沒動");
       eq(C.stopRecording(), [], "沒開過就 stop → 空陣列，不會炸");
     }
 
@@ -1800,6 +1804,101 @@
       eq(g[0].kind, "damage", "標明是傷害結算");
       eq(g[0].label, "測試技", "帶技能名");
       eq(g[0].rolls[0].coins.length, 2, "兩枚硬幣都記到");
+    }
+
+    // ============================================================
+    // d100 擲幣呈現（裁決 53）
+    // ============================================================
+    section("rollD100：門檻 = 50 + 專注力");
+    {
+      eq(S.rollD100(0, ALWAYS_HEAD).threshold, 50, "專注力 0 → 門檻 50");
+      eq(S.rollD100(12, ALWAYS_HEAD).threshold, 62, "專注力 +12 → 門檻 62（浮點不會變成 62.000…1）");
+      eq(S.rollD100(-40, ALWAYS_HEAD).threshold, 10, "專注力 −40 → 門檻 10（下限）");
+      eq(S.rollD100(40, ALWAYS_HEAD).threshold, 90, "專注力 +40 → 門檻 90（上限）");
+      eq(S.rollD100(0, ALWAYS_HEAD).roll, 1, "rng 回傳 0 → 擲出 1（不是 0）");
+      eq(S.rollD100(0, ALWAYS_TAIL).roll, 100, "rng 回傳 0.99 → 擲出 100");
+    }
+
+    section("⚠ 機率等價：擲 ≤ 門檻 的次數必須「恰好」等於門檻值");
+    {
+      // 這條直接證明「1d100 ≤ 門檻」與舊寫法 Math.random() < 機率 同機率 ——
+      // 也就是玩家質疑「系統是不是寫錯」時可以拿出來的證據。
+      [10, 50, 62, 90].forEach(function (th) {
+        const focus = th - 50;
+        let heads = 0;
+        for (let i = 0; i < 100; i++) {
+          // 均勻掃過 0.00, 0.01 … 0.99 → 對應擲出 1..100 各一次
+          if (S.rollD100(focus, function () { return i / 100; }).head) heads++;
+        }
+        eq(heads, th, "門檻 " + th + "（專注力 " + focus + "）→ 100 次均勻取樣恰好 " + th + " 次正面");
+      });
+    }
+
+    section("擲幣的數字要一路傳到 detail 與記錄器");
+    {
+      const e = mkEntity({ name: "擲幣者", focus: 12 });
+      const sk = mkSkill({ coins: ["normal", "normal"], basePower: 0, coinPower: 5 });
+      C.startRecording();
+      const r = C.rollAllCoins(C.makeCoinRuntime(sk), 0, 5, 12, ALWAYS_HEAD, e, []);
+      const g = C.stopRecording();
+      eq(r.threshold, 62, "rollAllCoins 回傳門檻");
+      eq(r.detail.map(function (d) { return d.roll; }), [1, 1], "每枚都帶擲出的數字");
+      eq(r.detail.map(function (d) { return d.threshold; }), [62, 62], "每枚都帶門檻");
+      eq(g[0].rolls[0].threshold, 62, "記錄器也拿得到門檻（動畫要顯示）");
+      eq(g[0].rolls[0].coins.map(function (c) { return c.roll; }), [1, 1], "記錄器帶得到每枚的數字");
+    }
+
+    section("傷害結算的擲幣也帶數字，且 log 有摘要");
+    {
+      const atk = mkEntity({ id: "a", name: "攻方", focus: 12 });
+      const tgt = mkEntity({ id: "t", name: "目標", hp: 9999, maxHp: 9999 });
+      const sk = mkSkill({ coins: ["normal", "normal"], basePower: 5, coinPower: 5 });
+      C.startRecording();
+      const res = runGen(D.resolveDamage(atk, tgt, C.makeCoinRuntime(sk), 5, 5, "測試技",
+        { rng: ALWAYS_HEAD, damageMultiplier: 1 })).value;
+      const g = C.stopRecording();
+      eq(g[0].rolls[0].coins.map(function (c) { return c.roll; }), [1, 1], "傷害的擲幣也帶數字");
+      eq(g[0].rolls[0].threshold, 62, "傷害的擲幣帶門檻");
+      eq(res.events.some(function (m) { return /門檻 62｜擲 1、1 → 正面 2／2/.test(m); }), true,
+        "log 有一行擲幣摘要");
+      eq(res.events.filter(function (m) { return /1d100/.test(m); }).length, 0,
+        "逐枚的傷害行沒有被灌爆（只寫摘要，裁決 53）");
+    }
+
+    // ============================================================
+    // 迅捷／綁縛改為每層 ±5 點（裁決 54–56）
+    // ============================================================
+    section("effectiveDex：每層 ±5 點，不是 ±5%");
+    {
+      const e = mkEntity({ name: "測試者", dex: 60 });
+      eq(S.effectiveDex(e), 60, "沒有狀態時就是原值");
+      S.apply(e, "迅捷", 3, 0);
+      eq(S.effectiveDex(e), 75, "3 層迅捷 → 60 + 15 = 75（舊制是 60×1.15 = 69）");
+      S.apply(e, "綁縛", 1, 0);
+      eq(S.effectiveDex(e), 70, "同時 1 層綁縛 → 60 + 15 − 5 = 70（兩者相抵）");
+    }
+
+    section("effectiveDex：下限卡在 1（裁決 55）");
+    {
+      const gob = mkEntity({ name: "哥布林", dex: 40 });
+      S.apply(gob, "綁縛", 10, 0);
+      eq(S.layerOf(gob, "綁縛"), 10, "綁縛上限仍是 10 層（裁決 56）");
+      eq(S.effectiveDex(gob), 1, "40 − 50 = −10 → 下限拉回 1，不會是 0 或負數");
+
+      const slow = mkEntity({ name: "極慢", dex: 5 });
+      S.apply(slow, "綁縛", 1, 0);
+      eq(S.effectiveDex(slow), 1, "5 − 5 = 0 → 也拉回 1");
+    }
+
+    section("低 DEX 角色受綁縛的影響比舊制大得多（設計後果）");
+    {
+      // 這是這次改動最實質的影響：定值加減讓女僕的綁縛對慢角色變成真威脅
+      const kaz = mkEntity({ name: "和真", dex: 50 });
+      S.apply(kaz, "綁縛", 4, 0);
+      eq(S.effectiveDex(kaz), 30, "和真 50 吃 4 層綁縛 → 30（舊制 50×0.80 = 40）");
+      const akira = mkEntity({ name: "旭", dex: 90 });
+      S.apply(akira, "迅捷", 5, 0);
+      eq(S.effectiveDex(akira), 115, "旭 90 吃 5 層迅捷 → 115（舊制 90×1.25 = 112.5，差不多）");
     }
 
     return { pass: pass, fail: fail, failures: failures, lines: lines };

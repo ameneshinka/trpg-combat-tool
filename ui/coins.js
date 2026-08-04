@@ -39,8 +39,14 @@
     wrap.setAttribute("data-face", c.head ? "head" : "tail");
     if (c.status === "已碎幣") wrap.setAttribute("data-shattered", "1");
     if (!reveal) wrap.setAttribute("data-spinning", "1");
-    wrap.setAttribute("aria-label", coinLabel(c) + "：" + (c.head ? "正面" : "反面"));
-    wrap.appendChild(el("span", { cls: "coin-face", text: c.head ? "正" : "反" }));
+    // 顯示擲出的 d100 數字（裁決 53）—— 正反面仍由顏色區分，
+    // 但數字才是玩家用來確認「機率確實對應專注力」的證據。
+    wrap.setAttribute("aria-label", coinLabel(c) + "：1d100 擲出 " + (c.roll !== undefined ? c.roll : "?") +
+      "，門檻 " + (c.threshold !== undefined ? c.threshold : "?") + "，" + (c.head ? "正面" : "反面"));
+    wrap.appendChild(el("span", {
+      cls: "coin-face",
+      text: reveal && c.roll !== undefined ? String(c.roll) : (c.head ? "正" : "反")
+    }));
     // 碎幣的有效幣威已經變成 1 —— 視覺上要看得出來（裁決 51）
     if (c.status === "已碎幣") wrap.appendChild(el("span", { cls: "coin-badge", text: "+1" }));
     return wrap;
@@ -56,6 +62,13 @@
       cls: "coin-power",
       text: reveal ? "最終威力 " + roll.power + "（正面 " + roll.heads + "／" + (roll.coins || []).length + "）" : "擲幣中…"
     }));
+    // 門檻：讓玩家自己核對「擲 ≤ 門檻 = 正面」與當前專注力是否相符
+    if (roll.threshold !== undefined) {
+      box.appendChild(el("div", {
+        cls: "coin-threshold",
+        text: "門檻 " + roll.threshold + "（擲 ≤" + roll.threshold + " 為正面）"
+      }));
+    }
     return box;
   }
 

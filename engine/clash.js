@@ -75,8 +75,8 @@
   Clash.recordRoll = recordRoll;
 
   // ---------------- 擲幣 ----------------
-  // 可注入 rng 以利測試（預設 Math.random）
-  function flip(prob, rng) { return (rng || Math.random)() < prob; }
+  // 擲幣統一走 States.rollD100（COC 式：擲 1d100 ≤ 門檻為正面）—— 三處呼叫端
+  // （拚點、傷害、支援技）拿到的是同一份數字，動畫與事件紀錄才對得起來。
 
   /**
    * 一次擲完當前所有「未損失」的硬幣，回傳最終威力。
@@ -84,13 +84,15 @@
    * ⚠ 最終威力下限為 0（基礎威力可為負）。
    */
   function rollAllCoins(coinRuntime, basePower, skillCoinPower, focus, rng, entity, events) {
-    const prob = S.headsProbability(focus);
     let power = basePower;
     let heads = 0;
+    let threshold = 0;
     const detail = [];
     coinRuntime.forEach(function (c, i) {
       if (c.status === LOST) return;
-      const isHead = flip(prob, rng);
+      const d100 = S.rollD100(focus, rng);
+      const isHead = d100.head;
+      threshold = d100.threshold;
       let eff = effectiveCoinPower(c, skillCoinPower);
       // 【恍惚】「使用技能擲硬幣時」該枚幣威歸零 —— 拚點的擲幣也算（裁決 8）。
       // ⚠ 觸發粒度是「每枚各一次、每次層 −1」→ 1 層恍惚只廢掉 1 枚，
@@ -101,15 +103,17 @@
         if (events) events.push("【恍惚】觸發：" + entity.name + " 這枚硬幣的幣威歸零（恍惚層 −1）");
       }
       if (isHead) { power += eff; heads++; }
-      detail.push({ index: i, type: c.type, status: c.status, head: isHead, effPower: eff });
+      detail.push({ index: i, type: c.type, status: c.status, head: isHead, effPower: eff,
+        roll: d100.roll, threshold: d100.threshold });
     });
-    const result = { power: Math.max(0, power), heads: heads, detail: detail };
+    const result = { power: Math.max(0, power), heads: heads, detail: detail, threshold: threshold };
     recordRoll({
       who: entity ? entity.name : "", whoId: entity ? entity.id : null,
       basePower: basePower, coinPower: skillCoinPower,
-      power: result.power, heads: heads,
+      power: result.power, heads: heads, threshold: threshold,
       coins: detail.map(function (d) {
-        return { type: d.type, status: d.status, head: d.head, effPower: d.effPower };
+        return { type: d.type, status: d.status, head: d.head, effPower: d.effPower,
+          roll: d.roll, threshold: d.threshold };
       })
     });
     return result;
@@ -202,9 +206,14 @@
       const rollB = rollAllCoins(sideB.coinRuntime, sideB.basePower, cpB, focusB, rng, sideB.entity, events);
       Clash.endGroup();
 
-      events.push("交換 #" + k + "：" + nameA + " 正面 " + rollA.heads + "／" + rollA.detail.length +
-        " → 最終威力 " + rollA.power + "　vs　" + nameB + " 正面 " + rollB.heads + "／" + rollB.detail.length +
-        " → 最終威力 " + rollB.power);
+      // 擲幣摘要（裁決 53：log 只寫摘要，不逐枚膨脹）—— 玩家事後可自行驗算機率
+      function rollSummary(name, r) {
+        if (!r.detail.length) return name + " 無可擲硬幣";
+        return name + " 門檻 " + r.threshold + "｜擲 " +
+          r.detail.map(function (d) { return d.roll; }).join("、") +
+          " → 正面 " + r.heads + "／" + r.detail.length + " → 最終威力 " + r.power;
+      }
+      events.push("交換 #" + k + "：" + rollSummary(nameA, rollA) + "　vs　" + rollSummary(nameB, rollB));
 
       if (rollA.power === rollB.power) {
         events.push("→ 平手，重擲這次交換（不損幣，但計入交換次數 k）");

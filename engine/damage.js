@@ -68,7 +68,6 @@
     events.push(label + "：傷害乘數骰 = " + multiplier + "（整把技能共用），攻擊次數 = " +
       rollable.length + " 下（含碎幣，反面照打）");
 
-    const prob = S.headsProbability(attacker.focus);
     let power = basePower;   // 最終威力逐枚累加
     let total = 0;
 
@@ -92,7 +91,8 @@
       }
 
       // 1. 擲該枚硬幣。正面 → 把「該枚的有效幣威」加進最終威力。
-      const isHead = (rng || Math.random)() < prob;
+      const d100 = S.rollD100(attacker.focus, rng);
+      const isHead = d100.head;
       let effPower = C.effectiveCoinPower(coin, coinPower);
 
       // 【恍惚】：使用技能擲硬幣時，該枚硬幣的硬幣威力歸零（每枚觸發，層 −1）
@@ -103,7 +103,8 @@
       }
       if (isHead) power += effPower;
       const finalPower = Math.max(0, power); // 最終威力下限 0
-      flipLog.push({ type: coin.type, status: coin.status, head: isHead, effPower: effPower });
+      flipLog.push({ type: coin.type, status: coin.status, head: isHead, effPower: effPower,
+        roll: d100.roll, threshold: d100.threshold });
 
       // 2. 凝神判定：1D20 < 級數 → 該枚 +30%，然後級數 −2、層數 −1
       let concentrationHit = false;
@@ -176,11 +177,16 @@
     }
 
     if (flipLog.length) {
+      // 擲幣摘要（裁決 53：log 只寫摘要）—— 玩家事後可自行驗算機率
+      events.push(label + "：門檻 " + flipLog[0].threshold + "｜擲 " +
+        flipLog.map(function (f) { return f.roll; }).join("、") +
+        " → 正面 " + flipLog.filter(function (f) { return f.head; }).length + "／" + flipLog.length);
       C.recordRoll({
         who: attacker.name, whoId: attacker.id,
         basePower: basePower, coinPower: coinPower,
         power: hits.length ? hits[hits.length - 1].finalPower : basePower,
         heads: flipLog.filter(function (f) { return f.head; }).length,
+        threshold: flipLog[0].threshold,
         coins: flipLog
       });
     }
@@ -240,7 +246,7 @@
     const runtime = fx ? fx.runtime : null;
 
     const rollable = coinRuntime.filter(function (c) { return c.status !== C.LOST; });
-    const prob = S.headsProbability(actor.focus);
+
     events.push("《" + skill.name + "》" + actor.name + " → " + (ally ? ally.name : "（無對象）") +
       "：不造成傷害，逐枚結算 " + rollable.length + " 枚硬幣");
 
@@ -259,8 +265,10 @@
         yield* E.call(ce.onUse, mkCtx(coin));
         if (runtime && runtime.stop) break;
       }
-      const isHead = (opts.rng || Math.random)() < prob;
-      events.push("　第 " + (i + 1) + " 枚：" + (isHead ? "正面" : "反面") + "（反面照樣算命中）");
+      const d100 = S.rollD100(actor.focus, opts.rng);
+      const isHead = d100.head;
+      events.push("　第 " + (i + 1) + " 枚：1d100 = " + d100.roll + "／門檻 " + d100.threshold +
+        " → " + (isHead ? "正面" : "反面") + "（反面照樣算命中）");
       if (ce && isHead && ce.onHead) yield* E.call(ce.onHead, mkCtx(coin, { isHead: true }));
       if (ce && ce.onHit) yield* E.call(ce.onHit, mkCtx(coin, { isHead: isHead }));
       if (ce && ce.afterHit) yield* E.call(ce.afterHit, mkCtx(coin, { isHead: isHead }));
